@@ -17,7 +17,7 @@ Requirements: Windows x64 and **Zig 0.16.0** (exactly; Zig's language and standa
 releases). Download it from <https://ziglang.org/download/> and put `zig.exe` on your `PATH`.
 
 ```text
-git clone <this repository>
+git clone https://github.com/kowa-lski/remielle-tas.git
 cd remielle-tas
 zig build -Doptimize=ReleaseFast
 zig build test
@@ -98,8 +98,4 @@ combat logger (copy them together).
 
 ## Licence
 
-AGPL-3.0, see `LICENSE`. Parts of this project come from thaumiel (AGPL-3.0,
-<https://git.xeondev.com/remielle/thaumiel>) and its combat-logger fork
-(<https://github.com/KodieCalcs/thaumiel-logger>): `src/detour.zig`, `src/Interception.zig`, `src/nt.zig`,
-`src/runtime_readiness.zig`, `src/dumper-rvas.zon` and `src/pins.zig` are taken from them, and `src/il2cpp.zig`
-is reduced from their `src/dumper.zig`. Everything else is new.
+AGPL-3.0, see `LICENSE`
