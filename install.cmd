@@ -3,6 +3,7 @@ rem Builds remielle-tas and copies it into a game folder:
 rem   install.cmd "D:\Games\ZZZ"     (the folder with ZenlessZoneZeroBeta.exe and remielle.exe)
 rem tas.txt is copied only if the game folder has none, so existing settings are kept.
 setlocal
+cd /d "%~dp0"
 if "%~1"=="" (
   echo usage: install.cmd "game folder"
   exit /b 1
