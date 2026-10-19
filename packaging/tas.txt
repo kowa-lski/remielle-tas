@@ -1,0 +1,42 @@
+# TAS input record / playback (remielle-tas). Put this file in the game folder (next to remielle.exe).
+# It is read at the start of every battle, so you can edit it between battles.
+
+mode = off              # off | record | play
+
+# record: where to save. Leave it out for TAS\battle-<date>-<time>.inputtrace.
+#         An existing file is never overwritten (-2, -3, ... is added).
+# play:   the recording to play back (required).
+file = TAS\run.inputtrace
+
+fps = 60                # game frames per second of game time (play uses the recording's)
+speed = 1               # real-time speed: 0.25 = quarter speed, 0 = as fast as possible
+
+# seed = 12345          # Random.InitState at battle start. record: saved with the recording;
+                        # play: overrides the recording's seed (leave out to use the recording's)
+
+# stop_key = F8        # play: press to stop the replay and take over (F1-F24, A-Z, 0-9, Pause,
+                        #       End, Home, Insert, Delete, Backspace, or none); game window must be in front
+
+# reseed = tree         # tree:  frame, plus a reseed before every enemy/Bangboo AI tree tick (seed +
+                        #        tree + frame), so nothing else drawing numbers can change their rolls
+                        # frame: re-apply the seed every game frame (seed + frame number), so random
+                        #        draws that follow real time (loading, effects) can't shift later frames
+                        # start: seed once at battle start (drifts within seconds; old behaviour)
+                        # record: saved with the recording; play: the recording's is used
+
+# Features added after run 11 (all off by default, which is run 11's setup). record: saved with the
+# recording; play: the recording's are used, whatever is set here.
+# Recommended: sync = on, the other two off; release all keys at battle start and give the first
+# input a moment after you can move (the movement unlock varies by a frame between runs).
+# sync = on             # inputs start at the first enemy-AI tree load instead of the battle's awake
+                        # (the opening load's length varies, and shifts the fight against the inputs)
+# pin_team = on         # needs sync: the team setup (agents' passives, resources, team listeners) runs
+                        # 90 frames after sync in every run instead of whenever loading finishes
+# pin_spawn = on        # experimental, needs sync: pause the entity manager from sync to frame 90, so
+                        # the team, intro and their timers start on frame 90 in every run
+# input_clock = on      # save the input system's clock with the recording and replay it (.clock file)
+# game_clocks = on      # Unity's clocks (realtimeSinceStartup, time, unscaledTime...) advance exactly one
+                        # frame per frame and round the same in every run (real-time UI tweens, timers)
+
+# devices = same        # play: same = replay into the devices that were recorded,
+                        #       new  = replay into new virtual copies of them

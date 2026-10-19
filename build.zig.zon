@@ -1,0 +1,7 @@
+.{
+    .name = .remielle_tas,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.16.0",
+    .paths = .{""},
+    .fingerprint = 0xc97b410b65c9ac5a,
+}
