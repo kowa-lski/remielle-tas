@@ -29,20 +29,21 @@ Output in `zig-out\bin\`:
 |---|---|
 | `remielle-tas.dll` | the TAS itself, loaded into the game |
 | `tas-inject.exe` | loads `remielle-tas.dll` into the running game |
+| `tas-gui.exe` | the launcher: edits `tas.txt`, injects, shows status and the log |
 
 ## Install
 
 `install.cmd "<game folder>"` builds and copies everything; the game folder is the one with
 `ZenlessZoneZeroBeta.exe` and `remielle.exe`. It copies `packaging\tas.txt` only if the folder has none yet.
 
-By hand: copy `zig-out\bin\remielle-tas.dll`, `zig-out\bin\tas-inject.exe` and `packaging\tas.txt` into the
-game folder.
+By hand: copy `zig-out\bin\remielle-tas.dll`, `zig-out\bin\tas-inject.exe`, `zig-out\bin\tas-gui.exe` and
+`packaging\tas.txt` into the game folder.
 
 ## Use
 
-**Launcher:** `tas-gui.cmd` in the game folder opens a small window that edits `tas.txt` (mode, file, fps,
-speed, seed, the switches), has an **Inject** button (runs `tas-inject.exe`) and shows whether the game is
-running, whether the DLL is in it, and the last lines of `TAS\tas-dll.log` and `TAS\tas-log.txt`.
+**Launcher:** `tas-gui.exe` in the game folder edits `tas.txt` (mode, file, fps, speed, seed, the switches;
+**Save** keeps the file's comments and any other settings), loads the TAS into the game (**Inject**), and shows
+whether the game is running, whether the TAS is in it, and the end of `TAS\tas-log.txt`.
 
 By hand:
 
@@ -110,4 +111,7 @@ combat logger (copy them together).
 
 ## Licence
 
-AGPL-3.0, see `LICENSE`
+AGPL-3.0, see `LICENSE`. Parts of this project come from [thaumiel](https://git.xeondev.com/remielle/thaumiel)
+(AGPL-3.0): `src/detour.zig`, `src/Interception.zig`, `src/nt.zig`, `src/runtime_readiness.zig`,
+`src/dumper-rvas.zon` and `src/pins.zig` are taken from it, and `src/il2cpp.zig` is reduced from its
+`src/dumper.zig`. Everything else is new.

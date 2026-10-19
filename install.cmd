@@ -15,7 +15,6 @@ if not exist "%~1\ZenlessZoneZeroBeta.exe" (
 zig build -Doptimize=ReleaseFast || exit /b 1
 copy /y "zig-out\bin\remielle-tas.dll" "%~1\" >nul || exit /b 1
 copy /y "zig-out\bin\tas-inject.exe" "%~1\" >nul || exit /b 1
-copy /y "packaging\tas-gui.ps1" "%~1\" >nul || exit /b 1
-copy /y "packaging\tas-gui.cmd" "%~1\" >nul || exit /b 1
+copy /y "zig-out\bin\tas-gui.exe" "%~1\" >nul || exit /b 1
 if not exist "%~1\tas.txt" copy "packaging\tas.txt" "%~1\" >nul
-echo Installed into %~1. Start the game with remielle.exe, then run tas-gui.cmd (or tas-inject.exe).
+echo Installed into %~1. Start the game with remielle.exe, then open tas-gui.exe (or run tas-inject.exe).

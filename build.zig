@@ -29,6 +29,18 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(inject);
 
+    const gui = b.addExecutable(.{
+        .name = "tas-gui",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/gui.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+        .win32_manifest = b.path("src/tas-gui.manifest"),
+    });
+    gui.subsystem = .windows;
+    b.installArtifact(gui);
+
     const tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/tas.zig"),
