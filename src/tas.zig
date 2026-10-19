@@ -756,12 +756,16 @@ var session_dir: PathBuf = undefined;
 var session_dir_len: usize = 0;
 var session_t0: u64 = 0;
 
-fn openSessionDir(mode: Mode) void {
+/// `TAS\logs\<date>-<time>-<mode>-<recording name>`; the name is the file stem from tas.txt.
+fn openSessionDir(mode: Mode, file: []const u8) void {
     var now: SystemTime = undefined;
     GetLocalTime(&now);
     _ = CreateDirectoryA(tas_dir, null);
     _ = CreateDirectoryA(tas_dir ++ "\\logs", null);
-    const dir = std.fmt.bufPrintZ(&session_dir, tas_dir ++ "\\logs\\{d:0>4}{d:0>2}{d:0>2}-{d:0>2}{d:0>2}{d:0>2}-{t}", .{ now.year, now.month, now.day, now.hour, now.minute, now.second, mode }) catch return;
+    const slash = if (std.mem.lastIndexOfAny(u8, file, "\\/")) |i| i + 1 else 0;
+    const dot = std.mem.lastIndexOfScalar(u8, file[slash..], '.') orelse file.len - slash;
+    const stem = if (file.len > slash) file[slash .. slash + dot] else "battle";
+    const dir = std.fmt.bufPrintZ(&session_dir, tas_dir ++ "\\logs\\{d:0>4}{d:0>2}{d:0>2}-{d:0>2}{d:0>2}{d:0>2}-{t}-{s}", .{ now.year, now.month, now.day, now.hour, now.minute, now.second, mode, stem }) catch return;
     _ = CreateDirectoryA(dir.ptr, null);
     session_dir_len = dir.len;
     session_t0 = GetTickCount64();
@@ -1948,7 +1952,7 @@ fn battleAwake() void {
     const config = parseConfig(text);
     if (config.mode == .off) return;
     session = .{ .mode = config.mode, .speed = config.speed };
-    openSessionDir(config.mode);
+    openSessionDir(config.mode, config.path());
     trees_len = 0;
     current_frame = 0;
     main_thread = GetCurrentThreadId();
@@ -1975,6 +1979,7 @@ fn battleAwake() void {
         .off => " clock=real",
     };
     userLog("{t} start  {s}  fps={d} speed={d} seed={s} reseed={t}{s}{s}{s}", .{ session.mode, session.path(), session.fps, session.speed, seed, session.reseed, if (session.devices_new) " devices=new" else "", clock_note, if (session.sync) " sync=bt-load" else "" });
+    userLog("{t}   logs in {s}", .{ session.mode, session_dir[0..session_dir_len] });
     if (session.game_clocks) userLog("{t}   game_clocks on", .{session.mode});
     if (session.pin_team) userLog("{t}   pin_team on: team setup at frame {d} after sync", .{ session.mode, team_setup_frame });
     if (session.pin_spawn) userLog("{t}   pin_spawn on: entity manager paused from sync to frame {d}", .{ session.mode, team_setup_frame });

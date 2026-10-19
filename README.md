@@ -32,9 +32,11 @@ Output in `zig-out\bin\`:
 
 ## Install
 
-1. Copy `remielle-tas.dll` and `tas-inject.exe` into the game folder (the one with `ZenlessZoneZeroBeta.exe` and
-   `remielle.exe`).
-2. Copy `packaging\tas.txt` into the game folder too.
+`install.cmd "<game folder>"` builds and copies everything; the game folder is the one with
+`ZenlessZoneZeroBeta.exe` and `remielle.exe`. It copies `packaging\tas.txt` only if the folder has none yet.
+
+By hand: copy `zig-out\bin\remielle-tas.dll`, `zig-out\bin\tas-inject.exe` and `packaging\tas.txt` into the
+game folder.
 
 ## Use
 
