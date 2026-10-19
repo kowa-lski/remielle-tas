@@ -1,7 +1,7 @@
 //! Shared detour installer: relocate a method's prologue into an executable stub and patch
 //! its entry with `Interception.replace` (12 bytes: mov rax,imm64; push rax; ret).
 //!
-//! Two prologue shapes are supported, both taken from the hooks that came before this module:
+//! Three prologue shapes are supported:
 //!
 //!   .plain    the first `prologue.len` bytes are position independent (pushes, `sub rsp`,
 //!             `movaps [rsp+..]`, `mov reg,reg`) and are copied verbatim (hitlog.installOne).
@@ -10,11 +10,15 @@
 //!             re-encoded through rax (`mov rax, imm64; cmp byte ptr [rax], 0`) so the flags
 //!             the following `je`/`jne` reads are identical; rax is scratch at method entry
 //!             and every such method overwrites it before reading it (capture.installAwake).
+//!   .jcc8     the same as .plain, followed by a short conditional jump (`7x rel8`, e.g.
+//!             System.Random.InternalSample's null check). The jump is re-encoded as a jcc over
+//!             two absolute jumps: fall-through, then the original target.
 //!
 //! The stub ends with `jmp [rip+0]` + the absolute address of the first byte not relocated.
-//! `prologue.len` must be >= 12 for `.plain` (the patch overwrites 12 bytes) and any length
-//! for `.cmp_rip` (the compare adds 7). A byte mismatch installs nothing and returns an error,
-//! so a client build with a different prologue is left untouched.
+//! `prologue.len` must be >= 12 for `.plain` (the patch overwrites 12 bytes), >= 10 for `.jcc8`
+//! (the jump adds 2) and any length for `.cmp_rip` (the compare adds 7). A byte mismatch
+//! installs nothing and returns an error, so a client build with a different prologue is left
+//! untouched.
 
 const std = @import("std");
 const nt = @import("nt.zig");
@@ -27,7 +31,7 @@ const PAGE_EXECUTE_READWRITE: u32 = 0x40;
 /// Bytes `Interception.replace` overwrites (mov rax,imm64; push rax; ret).
 const patch_len: usize = 12;
 
-pub const Shape = enum { plain, cmp_rip };
+pub const Shape = enum { plain, cmp_rip, jcc8 };
 
 pub const Spec = struct {
     /// Bytes that must be at the target, copied verbatim into the stub.
@@ -55,6 +59,10 @@ pub fn matches(target: usize, spec: Spec) bool {
         const n = spec.prologue.len;
         if (actual[n] != 0x80 or actual[n + 1] != 0x3D or actual[n + 6] != 0x00) return false;
     }
+    if (spec.shape == .jcc8) {
+        const op = actual[spec.prologue.len];
+        if (op < 0x70 or op > 0x7F) return false;
+    }
     return true;
 }
 
@@ -65,9 +73,13 @@ pub fn install(syscall: *nt.Syscall, target: usize, spec: Spec, original_slot: *
     if (!matches(target, spec)) return error.PrologueMismatch;
     const actual: [*]const u8 = @ptrFromInt(target);
     const n = spec.prologue.len;
-    const relocated: usize = if (spec.shape == .cmp_rip) n + 7 else n;
-    if (spec.shape == .cmp_rip and relocated < patch_len) return error.PrologueTooShort;
-    const stub_len: usize = n + 13 + 14;
+    const relocated: usize = switch (spec.shape) {
+        .plain => n,
+        .cmp_rip => n + 7,
+        .jcc8 => n + 2,
+    };
+    if (relocated < patch_len) return error.PrologueTooShort;
+    const stub_len: usize = n + 13 + 14 + 14;
     const stub = VirtualAlloc(null, stub_len, MEM_COMMIT_RESERVE, PAGE_EXECUTE_READWRITE) orelse return error.StubAllocFailed;
     const bytes: [*]u8 = @ptrCast(stub);
     @memcpy(bytes[0..n], actual[0..n]);
@@ -83,6 +95,17 @@ pub fn install(syscall: *nt.Syscall, target: usize, spec: Spec, original_slot: *
         bytes[at + 1] = 0x38;
         bytes[at + 2] = 0x00;
         at += 3;
+    }
+    if (spec.shape == .jcc8) {
+        const rel: i8 = @bitCast(actual[n + 1]);
+        const taken: usize = @intCast(@as(i64, @intCast(target + relocated)) + rel);
+        bytes[at] = actual[n]; // same condition, over the fall-through jump
+        bytes[at + 1] = 14;
+        jmpAbs(bytes, at + 2, target + relocated);
+        jmpAbs(bytes, at + 16, taken);
+        original_slot.* = @intFromPtr(stub);
+        _ = try Interception.replace(syscall, target, replacement);
+        return @intFromPtr(stub);
     }
     jmpAbs(bytes, at, target + relocated);
     original_slot.* = @intFromPtr(stub);

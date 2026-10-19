@@ -40,6 +40,12 @@ game folder.
 
 ## Use
 
+**Launcher:** `tas-gui.cmd` in the game folder opens a small window that edits `tas.txt` (mode, file, fps,
+speed, seed, the switches), has an **Inject** button (runs `tas-inject.exe`) and shows whether the game is
+running, whether the DLL is in it, and the last lines of `TAS\tas-dll.log` and `TAS\tas-log.txt`.
+
+By hand:
+
 1. Start the game with `remielle.exe` as usual.
 2. Run `tas-inject.exe` (it waits for the game if it isn't up yet). It reports when the DLL is loaded; details go
    to `TAS\tas-dll.log` in the game folder. Run it once per game launch.
@@ -61,6 +67,8 @@ seed = 42
 sync = on
 pin_team = on
 pin_spawn = on
+pin_assets = on
+pin_random = on
 ```
 
 - Play back at the speed you recorded at. Parts of the game run on real time, and the switches above pin the
@@ -74,13 +82,15 @@ pin_spawn = on
 | `sync` | inputs, input clock and reseeds count from the first behaviour-tree load instead of the battle's awake (the opening load's length varies) |
 | `pin_team` | the team setup (agents' passives, resources, team listeners) runs 90 frames after sync in every run (needs `sync`) |
 | `pin_spawn` | the entity manager is paused from sync to frame 90, so the intro and everything tied to the team's arrival start on that frame (needs `sync`; experimental) |
+| `pin_assets` | asset loads finish 30 frames after they are requested, so whatever waits on one (the boss's arrival) comes on the same frame in every run (needs `sync`; experimental) |
+| `pin_random` | `System.Random` generators (bullet effects seed theirs from the clock) get seeds from the battle seed, so bullets fly the same way in every run (needs `sync`) |
 | `input_clock` | saves the Input System's clock with the recording and replays it |
 | `game_clocks` | Unity's clocks (`realtimeSinceStartup`, `time`, `unscaledTime`, ...) advance exactly one frame per frame and round the same in every run |
 | `reseed` | `tree` (default): reseed Unity's generator before every AI tree tick; `frame`; `start` |
 
 ## Logs and analysis
 
-Each TAS session writes `TAS\logs\<date>-<time>-<mode>\` in the game folder:
+Each TAS session writes `TAS\logs\<date>-<time>-<mode>-<recording>\` in the game folder:
 
 | File | One row per |
 |---|---|
@@ -88,6 +98,8 @@ Each TAS session writes `TAS\logs\<date>-<time>-<mode>\` in the game folder:
 | `tas-trees.tsv` | AI behaviour-tree tick: tree, tick, seed, random state after, caller |
 | `tas-loads.tsv` | held/released enemy AI start, team setup, entity-manager pause |
 | `tas-bt-loads.tsv` | behaviour-tree load request: owner, tree asset, random state, call stack |
+| `tas-assets.tsv` | asset request: first callback, completion, and what `pin_assets` held |
+| `tas-rng.tsv` | `System.Random` / `Share.CRandom` seed and draw, and `Random.InitState` by the game: value, call stack |
 
 `tools\` has the Python scripts used to compare a recording with its playback (`compare_runs.py`, `tree_ticks.py`,
 `state_diff.py`, `rng_draws.py`; Python 3.10+, no packages). They take two folders, each holding a session's

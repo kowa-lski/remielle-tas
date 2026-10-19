@@ -78,6 +78,48 @@ until frame 90, and its first run there activates whatever finished loading mean
 `spawn-hold` and `spawn-resume` rows. If the tick also starts those loads, they start late instead: the team setup
 then arrives after frame 90 (`team-late`), and this approach doesn't work.
 
+**Asset loads** (`pin_assets = on`, needs `sync`, experimental). In run 27 the boss turned up 1-3 frames late in 6
+of 7 replays, at speed 0 and at speed 1. Its behaviour tree reaches `TryLoadBehavior` through the game's asset
+loader (the `NEMMALNDHLN` dispatcher, RVA `0x12EC4E40`, called back by a `Foundation.AssetRequestBase`), so the AI
+start hold counted from a moment that already followed a real-time load. Every Foundation request tells its
+consumers it is done in `AssetRequestBase.InvokeCompleteCallback` (RVA `0x7F23AB0`), and consumers register with
+`AddCompleteCallback` / `AddCompleteCallbackWithUserData` (RVA `0x7F25050`, `0x7F25350`). With `pin_assets` a
+completion that comes on a later frame than the request's first callback (an asynchronous load; one finishing in
+the same frame came from memory) is held until 30 frames after that callback and run from the per-frame step. A
+load that takes longer runs at once and is logged as `late`. A held request the loader recycles before its frame
+(its `Version` changes) is dropped and logged, since its consumers would never hear back. Loads now take at least
+half a second the first time an effect or model is used in a battle, in recordings and replays alike.
+
+**`tas-assets.tsv`** (diagnostic, after the sync point): `add` when a request gets its first callback, `done` when it
+completes (with the frame it was requested), and `held`, `release`, `late` or `dropped` with `pin_assets`. Comparing
+the `done` frames of a recording and a playback shows which loads land on different frames.
+
+**`tas-rng.tsv`** (diagnostic). Runs 26 and 27: Norma's EX Special bullets and Rocketboo's rocket hit 1-7 frames
+apart between runs while Unity's generator was identical. The effect controllers that move such bullets
+(`MonoEffectPluginController` and its per-system `GLPJGKBDGGI`) draw from their own generator (`BHJKFPFOMLH`, a
+`System.Random` rebuilt from a stored seed), and `Share.CRandom.Default` is seeded from the clock once per process.
+The log has one row per `System.Random` / `Share.CRandom` construction (`sys_new` / `crand_new`, with the seed or
+`clock`), per draw (`sys_draw` / `crand_draw`, the value; at most 24 rows per frame and source, plus a `sum-` row
+with the frame's full count), and per `Random.InitState` the game makes itself (`unity_init`). Each row has the TAS
+frame, thaumiel's order, the thread and the GameAssembly call stack. A seed or draw that differs between a
+recording and its playback on the same frame names the source.
+
+**Generator seeds** (`pin_random = on`, needs `sync`). Run 28's `tas-rng.tsv` found the bullet randomness: every
+bullet effect's generator is created in `GLPJGKBDGGI::LNHOKEBPCKI` (RVA `0x1A6C4510`) as
+`new System.Random(DateTime.Now ticks + 0xDD890000)`. The seeds came on the same frames in every run (587, 602,
+609, ...) and were unrelated numbers each time, and the bullets' track times and spread with them. A handful of
+`System.Random` instances made before the battle (UI tweens, services, a static helper used about 13 times a frame)
+also carry state from whatever ran before. With `pin_random`, from the sync point and on the game thread, a
+`System.Random` or `Share.CRandom` built during the battle gets its seed from the battle seed, the place it was built
+(its first 4 GameAssembly stack frames) and how many were built there before it. One built before the battle is
+re-seeded the same way at its first draw in the battle. `tas-rng.tsv` shows `game>pinned` seeds and `sys_pin` rows.
+Thread-pool generators on other threads are left alone.
+
+**Order counter.** thaumiel's rows (damage, hits, state) carry a process-wide `order`. The combat-logger fork exports
+its counter; the released thaumiel doesn't, but every row takes its order with `lock xadd [rip+x]` on the same
+global, so the DLL finds that address in thaumiel's code at start-up and reads it each frame into
+`tas-frames.tsv`. `tas-dll.log` says which was found.
+
 **`tas-bt-loads.tsv`** (diagnostic, with the sync hook installed) has one row per behaviour-tree load request:
 the synced frame, the requesting object's name, its external tree asset, `UnityEngine.Random.state` at that moment,
 and the call stack as GameAssembly RVAs. In run 24 one AI (first tick on frame 472) came up with a different object

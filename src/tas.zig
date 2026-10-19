@@ -123,6 +123,13 @@ const M = enum {
     gamepad_current,
     handle_new,
     handle_free,
+    ps_is_playing,
+    ps_get_auto_seed,
+    ps_set_auto_seed,
+    ps_set_seed,
+    ps_time,
+    ps_stop,
+    ps_play,
 };
 
 const pin_table = std.enums.EnumArray(M, Pin).init(.{
@@ -169,6 +176,15 @@ const pin_table = std.enums.EnumArray(M, Pin).init(.{
     // static GetTargetHandle(Object, Int32 handle = 0 -> new, GCHandleType) / FreeHandle(Int32)
     .handle_new = .{ .ns = "System.Runtime.InteropServices", .class = "GCHandle", .name = "GetTargetHandle", .params = 3, .rva = 0x1CBA6DB0 },
     .handle_free = .{ .ns = "System.Runtime.InteropServices", .class = "GCHandle", .name = "FreeHandle", .params = 1, .rva = 0x1CBA6FF0 },
+    // pin_random: the bullet effects' particle systems
+    .ps_is_playing = .{ .ns = "UnityEngine", .class = "ParticleSystem", .name = "get_isPlaying", .params = 0, .rva = 0x1FE49210 },
+    .ps_get_auto_seed = .{ .ns = "UnityEngine", .class = "ParticleSystem", .name = "get_useAutoRandomSeed", .params = 0, .rva = 0x1FE492A0 },
+    .ps_set_auto_seed = .{ .ns = "UnityEngine", .class = "ParticleSystem", .name = "set_useAutoRandomSeed", .params = 1, .rva = 0x1FE492B0 },
+    .ps_set_seed = .{ .ns = "UnityEngine", .class = "ParticleSystem", .name = "set_randomSeed", .params = 1, .rva = 0x1FE49290 },
+    .ps_time = .{ .ns = "UnityEngine", .class = "ParticleSystem", .name = "get_time", .params = 0, .rva = 0x1FE49260 },
+    // Stop(Boolean withChildren, ParticleSystemStopBehavior) / Play(Boolean withChildren)
+    .ps_stop = .{ .ns = "UnityEngine", .class = "ParticleSystem", .name = "Stop", .params = 2, .rva = 0x1FE49FB0 },
+    .ps_play = .{ .ns = "UnityEngine", .class = "ParticleSystem", .name = "Play", .params = 1, .rva = 0x1FE49F60 },
 });
 
 /// System.Exception._message and System.String's length / first char (checked at install).
@@ -232,6 +248,8 @@ fn install() !void {
     installTimeClocks(base) catch |err| log.err("Unity clocks not hooked ({t}); timers on real time may end a frame apart between runs", .{err});
     installTeamSetupHook(base) catch |err| log.err("team-setup hook not installed ({t}); pin_team unavailable", .{err});
     installSpawnTickHook(base) catch |err| log.err("entity-manager hook not installed ({t}); pin_spawn unavailable", .{err});
+    installRngHooks(base) catch |err| log.err("random diagnostics not hooked ({t}); no tas-rng.tsv", .{err});
+    installAssetHooks(base) catch |err| log.err("asset hooks not installed ({t}); no tas-assets.tsv, pin_assets unavailable", .{err});
     try installBattleHooks(base);
     resolveOrderCounter();
 }
@@ -382,6 +400,8 @@ const Config = struct {
     game_clocks: bool = false,
     pin_team: bool = false,
     pin_spawn: bool = false,
+    pin_assets: bool = false,
+    pin_random: bool = false,
 
     fn path(self: *const Config) []const u8 {
         return self.file[0..self.file_len];
@@ -446,6 +466,10 @@ fn parseConfig(text: []const u8) Config {
             config.pin_team = onOff(value, key);
         } else if (std.ascii.eqlIgnoreCase(key, "pin_spawn")) {
             config.pin_spawn = onOff(value, key);
+        } else if (std.ascii.eqlIgnoreCase(key, "pin_assets")) {
+            config.pin_assets = onOff(value, key);
+        } else if (std.ascii.eqlIgnoreCase(key, "pin_random")) {
+            config.pin_random = onOff(value, key);
         } else if (std.ascii.eqlIgnoreCase(key, "reseed")) {
             config.reseed = Reseed.parse(value) orelse blk: {
                 warn("{s}: reseed must be tree, frame or start, got {s}", .{ config_file, value });
@@ -496,7 +520,7 @@ fn userLog(comptime fmt: []const u8, args: anytype) void {
 /// `reseed` is absent from recordings made before the option existed; those were seeded at start.
 /// `input_clock` is absent from recordings made before it was optional; those had one exactly when
 /// they had `sync=` (runs 15 and 16).
-const Info = struct { fps: u32 = 0, seed: ?i32 = null, frames: i64 = -1, events: i64 = -1, reseed: Reseed = .start, sync: bool = false, input_clock: ?bool = null, game_clocks: bool = false, pin_team: bool = false, pin_spawn: bool = false };
+const Info = struct { fps: u32 = 0, seed: ?i32 = null, frames: i64 = -1, events: i64 = -1, reseed: Reseed = .start, sync: bool = false, input_clock: ?bool = null, game_clocks: bool = false, pin_team: bool = false, pin_spawn: bool = false, pin_assets: bool = false, pin_random: bool = false };
 
 fn infoPath(buffer: *Path, file: []const u8) ?[*:0]const u8 {
     const s = std.fmt.bufPrintZ(buffer, "{s}.info.txt", .{file}) catch return null;
@@ -524,6 +548,8 @@ fn readInfo(file: []const u8) ?Info {
         if (std.mem.eql(u8, key, "game_clocks")) info.game_clocks = std.mem.eql(u8, value, "1");
         if (std.mem.eql(u8, key, "pin_team")) info.pin_team = std.mem.eql(u8, value, "1");
         if (std.mem.eql(u8, key, "pin_spawn")) info.pin_spawn = std.mem.eql(u8, value, "1");
+        if (std.mem.eql(u8, key, "pin_assets")) info.pin_assets = std.mem.eql(u8, value, "1");
+        if (std.mem.eql(u8, key, "pin_random")) info.pin_random = std.mem.eql(u8, value, "1");
     }
     return info;
 }
@@ -583,6 +609,8 @@ const Session = struct {
     game_clocks: bool = false,
     pin_team: bool = false,
     pin_spawn: bool = false,
+    pin_assets: bool = false,
+    pin_random: bool = false,
     spawn_held: bool = false,
     spawn_resumed: bool = false,
 
@@ -612,7 +640,11 @@ fn applyTiming() CallError!void {
     else
         -1;
     try setInt(.app_set_fps, target);
-    if (session.seed) |seed| try setInt(.random_init, seed);
+    if (session.seed) |seed| {
+        own_init = true;
+        defer own_init = false;
+        try setInt(.random_init, seed);
+    }
 }
 
 fn restoreTiming() void {
@@ -662,6 +694,10 @@ fn beginRecord(config: *const Config) !void {
     if (config.pin_team and !session.pin_team) warn("pin_team = on needs sync = on and the team-setup hook; recording without it", .{});
     session.pin_spawn = config.pin_spawn and session.sync and spawn_tick_hooked;
     if (config.pin_spawn and !session.pin_spawn) warn("pin_spawn = on needs sync = on and the entity-manager hook; recording without it", .{});
+    session.pin_assets = config.pin_assets and session.sync and assets_hooked;
+    if (config.pin_assets and !session.pin_assets) warn("pin_assets = on needs sync = on and the asset hooks; recording without it", .{});
+    session.pin_random = config.pin_random and session.sync and rng_hooked;
+    if (config.pin_random and !session.pin_random) warn("pin_random = on needs sync = on and the random hooks; recording without it", .{});
     if (config.sync and !sync_hooked) warn("sync = on, but the behaviour-tree load hook is not installed; recording from the awake", .{});
     if (!session.sync) try startInputs();
 }
@@ -707,6 +743,16 @@ fn beginPlay(config: *const Config) !void {
     session.game_clocks = info.game_clocks;
     session.pin_team = info.pin_team;
     session.pin_spawn = info.pin_spawn;
+    session.pin_assets = info.pin_assets;
+    if (session.pin_assets and !(session.sync and assets_hooked)) {
+        userLog("play: {s} was recorded with pin_assets, but the asset hooks are not installed (or sync is off)", .{session.path()});
+        return error.AssetHooksMissing;
+    }
+    session.pin_random = info.pin_random;
+    if (session.pin_random and !(session.sync and rng_hooked)) {
+        userLog("play: {s} was recorded with pin_random, but the random hooks are not installed (or sync is off)", .{session.path()});
+        return error.RandomHooksMissing;
+    }
     if (session.pin_spawn and !(session.sync and spawn_tick_hooked)) {
         userLog("play: {s} was recorded with pin_spawn, but the entity-manager hook is not installed (or sync is off)", .{session.path()});
         return error.SpawnHookMissing;
@@ -777,18 +823,81 @@ fn battlePath(buf: *PathBuf, name: []const u8) [*:0]const u8 {
     return z.ptr;
 }
 
-/// thaumiel's process-wide row counter, when the installed thaumiel exports it (the combat-logger
-/// fork does): tas-frames.tsv then carries a value of it per frame, so its damage/state rows can be
-/// placed on exact frames. 0 otherwise.
+/// thaumiel's process-wide row counter: tas-frames.tsv carries a value of it per frame, so its
+/// damage/state rows can be placed on exact frames. The combat-logger fork exports it
+/// (`thaumiel_log_next_order`); the released thaumiel does not, but every row takes its order with
+/// `lock xadd [rip+x], reg` (InterlockedIncrement64) on that one counter, so the counter's address
+/// is the target those instructions share, found in thaumiel's code and read without taking an
+/// order. 0 when neither is found.
 var next_order: ?*const fn () callconv(.c) u64 = null;
+var order_counter: ?*const u64 = null;
 
 fn resolveOrderCounter() void {
     const module = GetModuleHandleA("thaumiel.dll") orelse return;
-    if (GetProcAddress(module, "thaumiel_log_next_order")) |f| next_order = @ptrCast(f);
+    if (GetProcAddress(module, "thaumiel_log_next_order")) |f| {
+        next_order = @ptrCast(f);
+        log.info("order counter: thaumiel_log_next_order export", .{});
+        return;
+    }
+    const base = @intFromPtr(module);
+    const text = textSection(base) orelse return;
+    const code: [*]const u8 = @ptrFromInt(text.start);
+    const Target = struct { at: usize, count: u32 };
+    var targets: [16]Target = undefined;
+    var n: usize = 0;
+    var i: usize = 0;
+    scan: while (i + 9 <= text.len) : (i += 1) {
+        // F0 (lock) REX.W[R] 0F C1 (xadd) modrm=00 reg 101 (rip+disp32)
+        if (code[i] != 0xF0 or (code[i + 1] != 0x48 and code[i + 1] != 0x4C) or code[i + 2] != 0x0F or code[i + 3] != 0xC1 or (code[i + 4] & 0xC7) != 0x05) continue;
+        const disp = std.mem.readInt(i32, code[i + 5 ..][0..4], .little);
+        const at: usize = @intCast(@as(i64, @intCast(text.start + i + 9)) + disp);
+        for (targets[0..n]) |*t| {
+            if (t.at == at) {
+                t.count += 1;
+                continue :scan;
+            }
+        }
+        if (n < targets.len) {
+            targets[n] = .{ .at = at, .count = 1 };
+            n += 1;
+        }
+    }
+    var best: usize = 0;
+    for (targets[0..n], 0..) |t, k| {
+        if (t.count > targets[best].count) best = k;
+    }
+    if (n == 0 or targets[best].count < 3) {
+        log.info("order counter: no shared lock xadd target in thaumiel.dll; tas-frames.tsv order stays 0", .{});
+        return;
+    }
+    order_counter = @ptrFromInt(targets[best].at);
+    log.info("order counter: thaumiel.dll+0x{X} ({d} lock xadd sites)", .{ targets[best].at - base, targets[best].count });
+}
+
+const Range = struct { start: usize, len: usize };
+
+/// The loaded image's `.text` section.
+fn textSection(base: usize) ?Range {
+    const image: [*]const u8 = @ptrFromInt(base);
+    if (image[0] != 'M' or image[1] != 'Z') return null;
+    const pe = std.mem.readInt(u32, image[0x3C..][0..4], .little);
+    if (!std.mem.eql(u8, image[pe..][0..4], "PE\x00\x00")) return null;
+    const sections = std.mem.readInt(u16, image[pe + 6 ..][0..2], .little);
+    const optional = std.mem.readInt(u16, image[pe + 20 ..][0..2], .little);
+    for (0..sections) |s| {
+        const header = pe + 24 + optional + 40 * s;
+        if (!std.mem.eql(u8, image[header..][0..5], ".text")) continue;
+        const size = std.mem.readInt(u32, image[header + 8 ..][0..4], .little);
+        const rva = std.mem.readInt(u32, image[header + 12 ..][0..4], .little);
+        return .{ .start = base + rva, .len = size };
+    }
+    return null;
 }
 
 fn orderNow() u64 {
-    return if (next_order) |f| f() else 0;
+    if (next_order) |f| return f();
+    if (order_counter) |p| return @atomicLoad(u64, p, .acquire);
+    return 0;
 }
 
 /// A buffered TSV file in the battle folder, open while a session runs.
@@ -847,6 +956,12 @@ fn openFrames() void {
     if (tick_hooked) trees_log.open();
     if (ai_start_hooked) loads_log.open();
     if (sync_hooked) btloads_log.open();
+    if (assets_hooked) assets_log.open();
+    if (rng_hooked) {
+        AcquireSRWLockExclusive(&rng_lock);
+        defer ReleaseSRWLockExclusive(&rng_lock);
+        rng_log.open();
+    }
 }
 
 fn closeFrames() void {
@@ -854,7 +969,10 @@ fn closeFrames() void {
     trees_log.close();
     loads_log.close();
     btloads_log.close();
+    assets_log.close();
+    closeRngLog();
     dropDeferred();
+    dropHeldAssets();
 }
 
 /// Called by the battle-update hook every frame of a battle, on the game thread.
@@ -886,9 +1004,10 @@ pub fn frame(elapsed_ms: u64, game_frame: i32, world: f32) void {
         frames_log.emit("{d}\t{d}\t{d}\t{d}\t{d}\t{x:0>8}\t{x:0>8}\t{x:0>8}\t{x:0>8}\t{d}\t{d:.6}\n", .{ unity, game_frame, elapsed_ms, world, order, state[0], state[1], state[2], state[3], rel, timeDirect(.time_unscaled) - timeDirect(.time_fixed_unscaled) });
     }
     if (ai_start_hooked) releaseDeferred();
+    if (held_len > 0) releaseHeldAssets();
     if (team_setup_pending > 0) releaseTeamSetup(rel);
     if (session.reseed == .frame or session.reseed == .tree) {
-        if (session.seed) |seed| setInt(.random_init, frameSeed(seed, rel)) catch {};
+        if (session.seed) |seed| reseedUnity(frameSeed(seed, rel));
     }
     if (session.mode == .play and !session.stopped and session.stop_key != 0) {
         const down = GetAsyncKeyState(session.stop_key) < 0; // high bit: held now
@@ -1006,7 +1125,7 @@ fn beforeTreeTick(tree: usize) ?TickNote {
         if (session.seed) |seed| note.value = treeTickSeed(seed, slot);
     }
     slot.ticks += 1;
-    if (note.value) |value| setInt(.random_init, value) catch {};
+    if (note.value) |value| reseedUnity(value);
     return note;
 }
 
@@ -1886,6 +2005,578 @@ fn installSpawnTickHook(base: usize) !void {
     log.info("hooked IDBODLAJBDJ::HFOHNJIKEAH at RVA 0x{X}: pin_spawn pauses it from sync to frame {d}", .{ target - base, team_setup_frame });
 }
 
+// --- diagnostic: random number sources outside Unity's generator (tas-rng.tsv) -------------------
+//
+// Runs 26 and 27: Norma's EX Special bullets and Rocketboo's rocket hit 1-7 frames apart between
+// runs while Unity's generator, reseeded by the TAS, was identical. The effect controllers that
+// move such bullets (MonoEffectPluginController and its per-system GLPJGKBDGGI) draw from their
+// own generator (BHJKFPFOMLH: a System.Random rebuilt from a stored seed), and Share.CRandom's
+// Default instance is seeded from the clock once per process. During a session this logs every
+// System.Random and Share.CRandom construction (its seed; `clock` for the parameterless one), their
+// draws, and every Random.InitState the game makes itself, with the TAS frame, thaumiel's order and
+// the GameAssembly call stack. Draw rows are capped per frame and source; every frame with draws
+// also gets a `sum` row with the full count, so counts can be compared even where rows were cut.
+
+const RngSource = enum { sys_new, sys_draw, sys_pin, crand_new, crand_draw, crand_pin, unity_init, ps_seed };
+const rng_draw_cap: u32 = 24;
+const rng_row_limit: u64 = 400_000;
+
+const sys_random_ctor0_rva: usize = 0x1CC84B00;
+const sys_random_ctor1_rva: usize = 0x1CC84B50;
+const sys_random_sample_rva: usize = 0x1CC84EA0;
+const crandom_ctor0_rva: usize = 0x72F9220;
+const crandom_ctor1_rva: usize = 0x72F9270;
+const crandom_sample_rva: usize = 0x72F95C0;
+/// push rsi; sub rsp,0x30; mov rsi,rcx; lea rcx,[rsp+0x28] (then the clock call) -- both classes.
+const random_ctor0_prologue = [_]u8{ 0x56, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x89, 0xCE, 0x48, 0x8D, 0x4C, 0x24, 0x28 };
+/// push r15/r14/r12/rsi/rdi/rbx; sub rsp,0x28 -- both classes.
+const random_ctor1_prologue = [_]u8{ 0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x28 };
+/// sub rsp,0x28; mov rdx,[rcx+0x10]; test rdx,rdx; then `je` (the .jcc8 shape) -- both classes.
+const random_sample_prologue = [_]u8{ 0x48, 0x83, 0xEC, 0x28, 0x48, 0x8B, 0x51, 0x10, 0x48, 0x85, 0xD2 };
+
+var sys_ctor0_original: u64 = 0;
+var sys_ctor1_original: u64 = 0;
+var sys_sample_original: u64 = 0;
+var crand_ctor0_original: u64 = 0;
+var crand_ctor1_original: u64 = 0;
+var crand_sample_original: u64 = 0;
+var unity_init_real: ?*const fn (i32) callconv(.c) void = null;
+var rng_hooked = false;
+
+/// The TAS's own Random.InitState calls, so the hook can tell them from the game's.
+var own_init = false;
+
+var rng_log: Tsv = .{ .name = "tas-rng.tsv", .header = "tas_frame\torder\tthread\tsource\tinstance\tvalue\tstack\n" };
+var rng_lock: usize = 0;
+var rng_rows: u64 = 0;
+var rng_frame: i32 = std.math.minInt(i32);
+var rng_counts = std.enums.EnumArray(RngSource, u32).initFill(0);
+
+extern "kernel32" fn AcquireSRWLockExclusive(*usize) callconv(.winapi) void;
+extern "kernel32" fn ReleaseSRWLockExclusive(*usize) callconv(.winapi) void;
+
+fn reseedUnity(value: i32) void {
+    own_init = true;
+    defer own_init = false;
+    setInt(.random_init, value) catch {};
+}
+
+/// GameAssembly's image (its managed code is in the `il2cpp` section, the runtime in `.text`), so
+/// stacks leave out this DLL and the detour stubs.
+var game_text: Range = .{ .start = 0, .len = 0 };
+
+fn imageRange(base: usize) ?Range {
+    const image: [*]const u8 = @ptrFromInt(base);
+    if (image[0] != 'M' or image[1] != 'Z') return null;
+    const pe = std.mem.readInt(u32, image[0x3C..][0..4], .little);
+    if (!std.mem.eql(u8, image[pe..][0..4], "PE\x00\x00")) return null;
+    const size = std.mem.readInt(u32, image[pe + 24 + 56 ..][0..4], .little); // OptionalHeader.SizeOfImage
+    return .{ .start = base, .len = size };
+}
+
+fn inGameCode(address: usize) bool {
+    return address >= game_text.start and address - game_text.start < game_text.len;
+}
+
+/// Up to 8 GameAssembly RVAs of the current call stack, `;`-separated.
+fn gameStack(buffer: []u8) []const u8 {
+    var frames = [_]usize{0} ** 16;
+    const n = RtlCaptureStackBackTrace(1, frames.len, &frames, null);
+    const base = il2cpp.gameBase() catch return "";
+    var len: usize = 0;
+    var kept: usize = 0;
+    for (frames[0..n]) |address| {
+        if (!inGameCode(address)) continue;
+        const piece = std.fmt.bufPrint(buffer[len..], "{s}0x{X}", .{ if (len == 0) "" else ";", address - base }) catch break;
+        len += piece.len;
+        kept += 1;
+        if (kept == 8) break;
+    }
+    return buffer[0..len];
+}
+
+/// Writes the previous frame's `sum` rows when the frame changes. Caller holds rng_lock.
+fn rngFrameRollover(now: i32) void {
+    if (now == rng_frame) return;
+    if (rng_frame != std.math.minInt(i32)) {
+        for (std.enums.values(RngSource)) |source| {
+            const count = rng_counts.get(source);
+            if (count == 0 or (source != .sys_draw and source != .crand_draw)) continue;
+            rng_log.emit("{d}\t{d}\t-\tsum-{t}\t-\t{d}\t\n", .{ rng_frame, orderNow(), source, count });
+        }
+    }
+    rng_frame = now;
+    rng_counts = .initFill(0);
+}
+
+fn rngRow(source: RngSource, instance: usize, value: i64, clock_seed: bool) void {
+    var value_buffer: [24]u8 = undefined;
+    const text = if (clock_seed) "clock" else std.fmt.bufPrint(&value_buffer, "{d}", .{value}) catch "?";
+    rngRowText(source, instance, text);
+}
+
+fn rngRowText(source: RngSource, instance: usize, value_text: []const u8) void {
+    if (!ready or session.mode == .off or rng_log.file == null) return;
+    AcquireSRWLockExclusive(&rng_lock);
+    defer ReleaseSRWLockExclusive(&rng_lock);
+    if (rng_log.file == null) return;
+    rngFrameRollover(current_frame);
+    const count = rng_counts.get(source) + 1;
+    rng_counts.set(source, count);
+    if ((source == .sys_draw or source == .crand_draw) and count > rng_draw_cap) return;
+    if (rng_rows >= rng_row_limit) return;
+    rng_rows += 1;
+    var stack_buffer: [160]u8 = undefined;
+    const stack = gameStack(&stack_buffer);
+    const thread: []const u8 = if (GetCurrentThreadId() == main_thread) "main" else "other";
+    rng_log.emit("{d}\t{d}\t{s}\t{t}\t0x{X}\t{s}\t{s}\n", .{ current_frame, orderNow(), thread, source, instance, value_text, stack });
+}
+
+fn closeRngLog() void {
+    AcquireSRWLockExclusive(&rng_lock);
+    defer ReleaseSRWLockExclusive(&rng_lock);
+    rngFrameRollover(std.math.minInt(i32) + 1);
+    rng_log.close();
+    rng_rows = 0;
+    rng_frame = std.math.minInt(i32);
+}
+
+const Hook6R = *const fn (u64, u64, u64, u64, u64, u64) callconv(.c) u64;
+
+// --- pin_random ------------------------------------------------------------------------------
+//
+// Run 28's tas-rng.tsv: every bullet effect's generator is created in GLPJGKBDGGI::LNHOKEBPCKI
+// (RVA 0x1A6C4510) as `new System.Random(DateTime.Now ticks + 0xDD890000)`, so the same bullet on
+// the same frame got an unrelated seed in every run, and its track times and spread with it. And a
+// handful of System.Random instances made before the battle (UI tweens, services, a static helper)
+// carry their state from whatever ran earlier. With `pin_random = on`, from the sync point and on
+// the game thread: a System.Random or Share.CRandom built during the battle gets a seed made from
+// the battle seed, where it was built (its first 4 GameAssembly stack frames) and how many were
+// built there before it; one built earlier is re-seeded the same way at its first draw in the
+// battle (from where that draw is made). The order generators are made and first used in is part
+// of the game's own deterministic run, so every run gets the same numbers. Other threads (the
+// thread pool's work stealing) are left alone.
+
+const SiteCount = struct { key: u32, n: u32 };
+var site_counts: [1024]SiteCount = undefined;
+var site_counts_len: usize = 0;
+var random_seen: [8192]usize = undefined;
+var random_seen_full = false;
+
+fn pinRandomActive() bool {
+    return ready and session.pin_random and session.sync_unity != null and GetCurrentThreadId() == main_thread;
+}
+
+fn resetPinRandom() void {
+    site_counts_len = 0;
+    @memset(&random_seen, 0);
+    random_seen_full = false;
+}
+
+/// FNV-1a over the first 4 GameAssembly RVAs of the stack.
+fn siteKey() u32 {
+    var frames = [_]usize{0} ** 16;
+    const n = RtlCaptureStackBackTrace(1, frames.len, &frames, null);
+    var h: u32 = 0x811C9DC5;
+    var kept: usize = 0;
+    for (frames[0..n]) |address| {
+        if (!inGameCode(address)) continue;
+        const rva: u32 = @truncate(address - game_text.start);
+        for (std.mem.asBytes(&rva)) |b| {
+            h ^= b;
+            h *%= 0x01000193;
+        }
+        kept += 1;
+        if (kept == 4) break;
+    }
+    return h;
+}
+
+/// The next seed for generators made (or first drawn from) at `key`.
+fn pinnedSeed(key: u32) i32 {
+    var n: u32 = 0;
+    for (site_counts[0..site_counts_len]) |*c| {
+        if (c.key == key) {
+            n = c.n;
+            c.n += 1;
+            break;
+        }
+    } else if (site_counts_len < site_counts.len) {
+        site_counts[site_counts_len] = .{ .key = key, .n = 1 };
+        site_counts_len += 1;
+    }
+    const base = frameSeed((session.seed orelse 0) ^ 0x52414E44, @bitCast(key));
+    return frameSeed(base, @bitCast(n));
+}
+
+/// True the first time `instance` is seen in this battle.
+fn firstSeen(instance: usize) bool {
+    if (instance == 0 or random_seen_full) return false;
+    var i: usize = @intCast(((instance >> 4) *% 0x9E3779B97F4A7C15) >> 51); // 13 bits
+    var probes: usize = 0;
+    while (probes < random_seen.len) : (probes += 1) {
+        if (random_seen[i] == instance) return false;
+        if (random_seen[i] == 0) {
+            random_seen[i] = instance;
+            return true;
+        }
+        i = (i + 1) & (random_seen.len - 1);
+    }
+    random_seen_full = true;
+    return false;
+}
+
+fn seedPair(buffer: []u8, game: i64, ours: i32) []const u8 {
+    return std.fmt.bufPrint(buffer, "{d}>{d}", .{ game, ours }) catch "?";
+}
+
+fn callCtor1(original: u64, instance: u64, seed: i32) void {
+    _ = @as(Hook6R, @ptrFromInt(@as(usize, @intCast(original))))(instance, @as(u32, @bitCast(seed)), 0, 0, 0, 0);
+}
+
+fn ctor0After(source: RngSource, ctor1_original: u64, instance: u64) void {
+    if (pinRandomActive()) {
+        _ = firstSeen(@intCast(instance));
+        const seed = pinnedSeed(siteKey());
+        callCtor1(ctor1_original, instance, seed);
+        var buffer: [32]u8 = undefined;
+        rngRowText(source, @intCast(instance), std.fmt.bufPrint(&buffer, "clock>{d}", .{seed}) catch "?");
+    } else rngRow(source, @intCast(instance), 0, true);
+}
+
+/// The seed argument to pass on (replaced with pin_random).
+fn ctor1Before(source: RngSource, instance: u64, seed_arg: u64) u64 {
+    const game: i32 = @bitCast(@as(u32, @truncate(seed_arg)));
+    if (pinRandomActive()) {
+        _ = firstSeen(@intCast(instance));
+        const seed = pinnedSeed(siteKey());
+        var buffer: [32]u8 = undefined;
+        rngRowText(source, @intCast(instance), seedPair(&buffer, game, seed));
+        return @as(u32, @bitCast(seed));
+    }
+    rngRow(source, @intCast(instance), game, false);
+    return seed_arg;
+}
+
+fn sampleBefore(source: RngSource, ctor1_original: u64, instance: u64) void {
+    if (pinRandomActive() and firstSeen(@intCast(instance))) {
+        const seed = pinnedSeed(siteKey());
+        callCtor1(ctor1_original, instance, seed);
+        rngRow(source, @intCast(instance), seed, false);
+    }
+}
+
+fn sysCtor0Hook(a0: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) callconv(.c) u64 {
+    const r = @as(Hook6R, @ptrFromInt(@as(usize, @intCast(sys_ctor0_original))))(a0, a1, a2, a3, a4, a5);
+    ctor0After(.sys_new, sys_ctor1_original, a0);
+    return r;
+}
+
+fn sysCtor1Hook(a0: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) callconv(.c) u64 {
+    const seed = ctor1Before(.sys_new, a0, a1);
+    return @as(Hook6R, @ptrFromInt(@as(usize, @intCast(sys_ctor1_original))))(a0, seed, a2, a3, a4, a5);
+}
+
+fn sysSampleHook(a0: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) callconv(.c) u64 {
+    sampleBefore(.sys_pin, sys_ctor1_original, a0);
+    const r = @as(Hook6R, @ptrFromInt(@as(usize, @intCast(sys_sample_original))))(a0, a1, a2, a3, a4, a5);
+    rngRow(.sys_draw, @intCast(a0), @as(i32, @bitCast(@as(u32, @truncate(r)))), false);
+    return r;
+}
+
+fn crandCtor0Hook(a0: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) callconv(.c) u64 {
+    const r = @as(Hook6R, @ptrFromInt(@as(usize, @intCast(crand_ctor0_original))))(a0, a1, a2, a3, a4, a5);
+    ctor0After(.crand_new, crand_ctor1_original, a0);
+    return r;
+}
+
+fn crandCtor1Hook(a0: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) callconv(.c) u64 {
+    const seed = ctor1Before(.crand_new, a0, a1);
+    return @as(Hook6R, @ptrFromInt(@as(usize, @intCast(crand_ctor1_original))))(a0, seed, a2, a3, a4, a5);
+}
+
+fn crandSampleHook(a0: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) callconv(.c) u64 {
+    sampleBefore(.crand_pin, crand_ctor1_original, a0);
+    const r = @as(Hook6R, @ptrFromInt(@as(usize, @intCast(crand_sample_original))))(a0, a1, a2, a3, a4, a5);
+    rngRow(.crand_draw, @intCast(a0), @as(i32, @bitCast(@as(u32, @truncate(r)))), false);
+    return r;
+}
+
+fn unityInitHook(seed: i32) callconv(.c) void {
+    if (!own_init) rngRow(.unity_init, 0, seed, false);
+    if (unity_init_real) |real| real(seed);
+}
+
+// The bullet effect wrapper (GLPJGKBDGGI, one per particle system of an effect controller) is set
+// up in LNHOKEBPCKI: the generator above, then a Clear of its particle system (+0x88). Unity seeds a
+// particle system from its own generator every time it plays unless useAutoRandomSeed is off, and
+// a bullet's particle (its start speed, lifetime) is what the controller steers. With pin_random,
+// right after the set-up the system gets a fixed seed (pinned like the generators). Run 31-2: every
+// one was already playing by then (they start when the effect is spawned, a moment earlier in the
+// same frame, and the set-up clears their particles), and a seed can't change while a system plays,
+// so it is stopped (this system only, particles cleared), seeded and played again. The log row has
+// the system's play time before the restart, which should be 0 (started this frame).
+
+const fx_setup_rva: usize = 0x1A6C4510;
+/// push r15/r14/rsi/rdi/rbx; sub rsp,0x40; mov rdi,rdx; mov rsi,rcx -- position independent.
+const fx_setup_prologue = [_]u8{ 0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x89, 0xD7, 0x48, 0x89, 0xCE };
+const off_fx_particle_system: usize = 0x88; // GLPJGKBDGGI.EHHDIKLPLMD
+var fx_setup_original: u64 = 0;
+
+fn fxSetupHook(a0: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) callconv(.c) u64 {
+    const r = @as(Hook6R, @ptrFromInt(@as(usize, @intCast(fx_setup_original))))(a0, a1, a2, a3, a4, a5);
+    if (pinRandomActive() and a0 != 0) pinParticleSeed(readUsize(@as(usize, @intCast(a0)) + off_fx_particle_system));
+    return r;
+}
+
+fn pinParticleSeed(system: usize) void {
+    if (system == 0) return;
+    const seed = pinnedSeed(siteKey());
+    const playing = unbox(u8, call(.ps_is_playing, system, &.{}) catch return) != 0;
+    const auto = unbox(u8, call(.ps_get_auto_seed, system, &.{}) catch return) != 0;
+    const time = unbox(f32, call(.ps_time, system, &.{}) catch return);
+    var only_this: bool = false;
+    if (playing) {
+        var stop_and_clear: i32 = 1; // ParticleSystemStopBehavior.StopEmittingAndClear
+        _ = call(.ps_stop, system, &.{ @intFromPtr(&only_this), @intFromPtr(&stop_and_clear) }) catch return;
+    }
+    var off: bool = false;
+    var value: u32 = @bitCast(seed);
+    _ = call(.ps_set_auto_seed, system, &.{@intFromPtr(&off)}) catch return;
+    _ = call(.ps_set_seed, system, &.{@intFromPtr(&value)}) catch return;
+    if (playing) _ = call(.ps_play, system, &.{@intFromPtr(&only_this)}) catch return;
+    var buffer: [64]u8 = undefined;
+    rngRowText(.ps_seed, system, std.fmt.bufPrint(&buffer, "{s} t={d:.3} auto={d}>{d}", .{ if (playing) "restarted" else "idle", time, @intFromBool(auto), value }) catch "?");
+}
+
+fn installRngHooks(base: usize) !void {
+    const sys = try il2cpp.findClass("System", "Random");
+    const crand = try il2cpp.findClass("Share", "CRandom");
+    const unity = try il2cpp.findClass("UnityEngine", "Random");
+    const targets = [_]struct { klass: usize, name: [:0]const u8, params: usize, rva: usize, spec: detour.Spec }{
+        .{ .klass = sys, .name = ".ctor", .params = 0, .rva = sys_random_ctor0_rva, .spec = .{ .prologue = &random_ctor0_prologue, .shape = .plain } },
+        .{ .klass = sys, .name = ".ctor", .params = 1, .rva = sys_random_ctor1_rva, .spec = .{ .prologue = &random_ctor1_prologue, .shape = .plain } },
+        .{ .klass = sys, .name = "InternalSample", .params = 0, .rva = sys_random_sample_rva, .spec = .{ .prologue = &random_sample_prologue, .shape = .jcc8 } },
+        .{ .klass = crand, .name = ".ctor", .params = 0, .rva = crandom_ctor0_rva, .spec = .{ .prologue = &random_ctor0_prologue, .shape = .plain } },
+        .{ .klass = crand, .name = ".ctor", .params = 1, .rva = crandom_ctor1_rva, .spec = .{ .prologue = &random_ctor1_prologue, .shape = .plain } },
+        .{ .klass = crand, .name = "InternalSample", .params = 0, .rva = crandom_sample_rva, .spec = .{ .prologue = &random_sample_prologue, .shape = .jcc8 } },
+    };
+    const fx_setup = try il2cpp.findMethodAt(try il2cpp.findClass("", "GLPJGKBDGGI"), "LNHOKEBPCKI", 1, fx_setup_rva);
+    const fx_spec: detour.Spec = .{ .prologue = &fx_setup_prologue, .shape = .plain };
+    if (!detour.matches(fx_setup, fx_spec)) return error.PrologueMismatch;
+    if (try il2cpp.findField(try il2cpp.findClass("", "GLPJGKBDGGI"), "EHHDIKLPLMD") != off_fx_particle_system) return error.EffectLayoutChanged;
+    var addresses: [targets.len]usize = undefined;
+    // check every target before patching any
+    for (targets, 0..) |t, i| {
+        addresses[i] = try il2cpp.findMethodAt(t.klass, t.name, t.params, t.rva);
+        if (!detour.matches(addresses[i], t.spec)) return error.PrologueMismatch;
+    }
+    game_text = imageRange(base) orelse return error.NoImageHeader;
+    const init = try il2cpp.findMethodAt(unity, "InitState", 1, pin_table.get(.random_init).rva);
+    const init_slot = try icallSlot(init, 0);
+    if (init_slot.* == 0) return error.InitStateSlotEmpty;
+
+    var syscall: nt.Syscall = .init;
+    _ = try detour.install(&syscall, addresses[0], targets[0].spec, &sys_ctor0_original, sysCtor0Hook);
+    _ = try detour.install(&syscall, addresses[1], targets[1].spec, &sys_ctor1_original, sysCtor1Hook);
+    _ = try detour.install(&syscall, addresses[2], targets[2].spec, &sys_sample_original, sysSampleHook);
+    _ = try detour.install(&syscall, addresses[3], targets[3].spec, &crand_ctor0_original, crandCtor0Hook);
+    _ = try detour.install(&syscall, addresses[4], targets[4].spec, &crand_ctor1_original, crandCtor1Hook);
+    _ = try detour.install(&syscall, addresses[5], targets[5].spec, &crand_sample_original, crandSampleHook);
+    _ = try detour.install(&syscall, fx_setup, fx_spec, &fx_setup_original, fxSetupHook);
+    unity_init_real = @ptrFromInt(try swapSlot(init_slot, @intFromPtr(&unityInitHook)));
+    rng_hooked = true;
+    log.info("random diagnostics hooked: System.Random and Share.CRandom (ctors, InternalSample), Random.InitState slot at RVA 0x{X}", .{@intFromPtr(init_slot) - base});
+}
+
+// --- asset loads: tas-assets.tsv and pin_assets -------------------------------------------------
+//
+// Run 27: the boss turned up 0-3 frames late in 6 of 7 replays, at speed 0 and at speed 1. Its
+// behaviour tree arrives through the game's asset loader (the NEMMALNDHLN dispatcher, a
+// Foundation.AssetRequestBase complete callback), so the TryLoadBehavior call the AI-start hold
+// counts from already comes after a load that takes real time; the boss entity itself is set up
+// from loaded assets too. Every Foundation asset request tells its consumers it is done in
+// AssetRequestBase.InvokeCompleteCallback, and consumers register with AddCompleteCallback.
+//
+// tas-assets.tsv logs, after the sync point: the frame each request first got a callback
+// (`add`), the frame it completed (`done`), and with `pin_assets = on` what was held. pin_assets
+// holds a completion that comes on a later frame than its first callback (an asynchronous load;
+// one finishing in the frame it was asked for came from memory and is left alone) until
+// `asset_delay` frames after that callback, and runs it from frame(); one that finishes later
+// than that runs at once and is logged as `late`. A held request whose Version changes before its
+// frame (recycled by the loader) is dropped and logged. Experimental.
+
+const asset_delay: i32 = 30;
+
+const add_callback_rva: usize = 0x7F25050;
+const add_callback_user_rva: usize = 0x7F25350;
+const invoke_callbacks_rva: usize = 0x7F23AB0;
+/// push r15/r14/rsi/rdi/rbx; sub rsp,0xc0 -- position independent.
+const add_callback_prologue = [_]u8{ 0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0xC0, 0x00, 0x00, 0x00 };
+/// push r15/r14/r12/rsi/rdi/rbx; sub rsp,0xa8 -- position independent.
+const add_callback_user_prologue = [_]u8{ 0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0xA8, 0x00, 0x00, 0x00 };
+/// push rbp/r15/r14/r13/r12/rsi/rdi/rbx; sub rsp,0x258 -- position independent.
+const invoke_callbacks_prologue = [_]u8{ 0x55, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0x58, 0x02, 0x00, 0x00 };
+const off_request_url: usize = 0x20; // AssetRequestBase.<Url>k__BackingField (AssetPath: string, then hash)
+const off_request_version: usize = 0x6C; // AssetRequestBase.<Version>k__BackingField
+
+var add_callback_original: u64 = 0;
+var add_callback_user_original: u64 = 0;
+var invoke_callbacks_original: u64 = 0;
+var assets_hooked = false;
+
+var assets_log: Tsv = .{ .name = "tas-assets.tsv", .header = "tas_frame\torder\tevent\trequested\turl\n" };
+
+const PendingRequest = struct { request: usize, frame: i32 };
+var pending_requests: [2048]PendingRequest = undefined;
+var pending_len: usize = 0;
+
+const HeldAsset = struct { request: usize, handle: u32, version: i32, requested: i32, natural: i32, target: i32 };
+var held_assets: [256]HeldAsset = undefined;
+var held_len: usize = 0;
+
+/// Requests are tracked from the session's start (so loads asked for during battle loading have a
+/// request frame too); only those asked for at or after the sync point are held.
+fn assetsActive() bool {
+    return ready and session.mode != .off and assets_log.file != null and GetCurrentThreadId() == main_thread;
+}
+
+fn requestUrl(request: usize, buffer: []u8) []const u8 {
+    const path = readUsize(request + off_request_url);
+    if (path != 0) {
+        const text = managedString(path, buffer);
+        if (text.len > 0) return text;
+    }
+    const hash = readUsize(request + off_request_url + 8);
+    if (hash != 0) return std.fmt.bufPrint(buffer, "#{X}", .{hash}) catch "?";
+    // no path: an instance or pool request; its class says which
+    var class_buffer: [96]u8 = undefined;
+    const class = il2cpp.objectClassName(request, &class_buffer) catch "?";
+    return std.fmt.bufPrint(buffer, "<{s}>", .{class}) catch "?";
+}
+
+fn requestVersion(request: usize) i32 {
+    return @as(*align(1) const i32, @ptrFromInt(request + off_request_version)).*;
+}
+
+fn assetRow(event: []const u8, request: usize, requested: ?i32) void {
+    var url_buffer: [200]u8 = undefined;
+    var requested_buffer: [16]u8 = undefined;
+    const requested_text = if (requested) |r| std.fmt.bufPrint(&requested_buffer, "{d}", .{sessionFrame(r)}) catch "?" else "-";
+    assets_log.emit("{d}\t{d}\t{s}\t{s}\t{s}\n", .{ current_frame, orderNow(), event, requested_text, requestUrl(request, &url_buffer) });
+}
+
+fn pendingIndex(request: usize) ?usize {
+    for (pending_requests[0..pending_len], 0..) |p, i| if (p.request == request) return i;
+    return null;
+}
+
+fn noteRequest(request: usize) void {
+    if (request == 0 or !assetsActive() or pendingIndex(request) != null) return;
+    if (pending_len == pending_requests.len) return;
+    const now = unityFrame();
+    pending_requests[pending_len] = .{ .request = request, .frame = now };
+    pending_len += 1;
+    assetRow("add", request, now);
+}
+
+fn addCallbackHook(a0: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) callconv(.c) u64 {
+    noteRequest(@intCast(a0));
+    return @as(Hook6R, @ptrFromInt(@as(usize, @intCast(add_callback_original))))(a0, a1, a2, a3, a4, a5);
+}
+
+fn addCallbackUserHook(a0: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) callconv(.c) u64 {
+    noteRequest(@intCast(a0));
+    return @as(Hook6R, @ptrFromInt(@as(usize, @intCast(add_callback_user_original))))(a0, a1, a2, a3, a4, a5);
+}
+
+fn invokeCallbacksHook(a0: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) callconv(.c) u64 {
+    const original: Hook6R = @ptrFromInt(@as(usize, @intCast(invoke_callbacks_original)));
+    const request: usize = @intCast(a0);
+    if (request == 0 or !assetsActive()) return original(a0, a1, a2, a3, a4, a5);
+    const now = unityFrame();
+    const index = pendingIndex(request);
+    const requested: ?i32 = if (index) |i| pending_requests[i].frame else null;
+    if (index) |i| {
+        pending_requests[i] = pending_requests[pending_len - 1];
+        pending_len -= 1;
+    }
+    assetRow("done", request, requested);
+    const r = requested orelse return original(a0, a1, a2, a3, a4, a5);
+    const sync = session.sync_unity orelse return original(a0, a1, a2, a3, a4, a5);
+    if (!session.pin_assets or now == r or r < sync) return original(a0, a1, a2, a3, a4, a5);
+    const target = r + asset_delay;
+    if (now >= target or held_len == held_assets.len) {
+        assetRow("late", request, r);
+        return original(a0, a1, a2, a3, a4, a5);
+    }
+    held_assets[held_len] = .{ .request = request, .handle = hold(request), .version = requestVersion(request), .requested = r, .natural = now, .target = target };
+    held_len += 1;
+    assetRow("held", request, r);
+    return 0;
+}
+
+/// Held completions whose frame has come, in the order they finished.
+fn releaseHeldAssets() void {
+    if (held_len == 0) return;
+    const original: Hook6R = @ptrFromInt(@as(usize, @intCast(invoke_callbacks_original)));
+    const now = unityFrame();
+    var kept: usize = 0;
+    // a callback may start another load that finishes and is held; it goes to the end, untouched
+    const count = held_len;
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        const entry = held_assets[i];
+        if (entry.target > now) {
+            held_assets[kept] = entry;
+            kept += 1;
+            continue;
+        }
+        if (requestVersion(entry.request) != entry.version) {
+            assetRow("dropped", entry.request, entry.requested);
+            userLog("assets a held load was recycled by the loader before its frame and was dropped; this battle may not replay (see tas-assets.tsv)", .{});
+        } else {
+            assetRow("release", entry.request, entry.requested);
+            _ = original(entry.request, 0, 0, 0, 0, 0);
+        }
+        release(entry.handle);
+    }
+    // loads held while the callbacks above ran
+    while (i < held_len) : (i += 1) {
+        held_assets[kept] = held_assets[i];
+        kept += 1;
+    }
+    held_len = kept;
+}
+
+/// Battle over: held completions are dropped with their battle.
+fn dropHeldAssets() void {
+    for (held_assets[0..held_len]) |entry| release(entry.handle);
+    held_len = 0;
+    pending_len = 0;
+}
+
+fn installAssetHooks(base: usize) !void {
+    const request = try il2cpp.findClass("Foundation", "AssetRequestBase");
+    if (try il2cpp.findField(request, "<Url>k__BackingField") != off_request_url) return error.RequestLayoutChanged;
+    if (try il2cpp.findField(request, "<Version>k__BackingField") != off_request_version) return error.RequestLayoutChanged;
+    const path = try il2cpp.findClass("Foundation", "AssetPath");
+    if (try il2cpp.findField(path, "_stringPath") != 0x10 or try il2cpp.findField(path, "_pathHash") != 0x18) return error.AssetPathLayoutChanged;
+    const add = try il2cpp.findMethodAt(request, "AddCompleteCallback", 2, add_callback_rva);
+    const add_user = try il2cpp.findMethodAt(request, "AddCompleteCallbackWithUserData", 3, add_callback_user_rva);
+    const invoke = try il2cpp.findMethodAt(request, "InvokeCompleteCallback", 0, invoke_callbacks_rva);
+    const add_spec: detour.Spec = .{ .prologue = &add_callback_prologue, .shape = .plain };
+    const add_user_spec: detour.Spec = .{ .prologue = &add_callback_user_prologue, .shape = .plain };
+    const invoke_spec: detour.Spec = .{ .prologue = &invoke_callbacks_prologue, .shape = .plain };
+    if (!detour.matches(add, add_spec) or !detour.matches(add_user, add_user_spec) or !detour.matches(invoke, invoke_spec)) return error.PrologueMismatch;
+    var syscall: nt.Syscall = .init;
+    _ = try detour.install(&syscall, invoke, invoke_spec, &invoke_callbacks_original, invokeCallbacksHook);
+    _ = try detour.install(&syscall, add, add_spec, &add_callback_original, addCallbackHook);
+    _ = try detour.install(&syscall, add_user, add_user_spec, &add_callback_user_original, addCallbackUserHook);
+    assets_hooked = true;
+    log.info("asset hooks: AssetRequestBase.AddCompleteCallback (RVA 0x{X}, 0x{X}) and InvokeCompleteCallback (RVA 0x{X}); pin_assets holds async completions to {d} frames after the request", .{ add - base, add_user - base, invoke - base, asset_delay });
+}
+
 // --- battle lifecycle: own hooks, clear of thaumiel's ---------------------------------------------
 //
 // thaumiel (the logger build) hooks BattleStatsSubsystem.OnAwake / OnDestroy and the level time
@@ -1957,6 +2648,7 @@ fn battleAwake() void {
     current_frame = 0;
     main_thread = GetCurrentThreadId();
     dropDeferred();
+    resetPinRandom();
     team_setup_pending = 0;
     const result = switch (config.mode) {
         .record => beginRecord(&config),
@@ -1983,6 +2675,8 @@ fn battleAwake() void {
     if (session.game_clocks) userLog("{t}   game_clocks on", .{session.mode});
     if (session.pin_team) userLog("{t}   pin_team on: team setup at frame {d} after sync", .{ session.mode, team_setup_frame });
     if (session.pin_spawn) userLog("{t}   pin_spawn on: entity manager paused from sync to frame {d}", .{ session.mode, team_setup_frame });
+    if (session.pin_assets) userLog("{t}   pin_assets on: asset loads complete {d} frames after they are requested", .{ session.mode, asset_delay });
+    if (session.pin_random) userLog("{t}   pin_random on: System.Random seeds come from the battle seed", .{session.mode});
     const settings = call(.input_settings, 0, &.{}) catch 0;
     const update_mode: i32 = if (settings != 0) unbox(i32, call(.settings_update_mode, settings, &.{}) catch 0) else -1;
     userLog("{t}   input update mode {d} (1 dynamic, 2 fixed, 3 manual), fixed step {d:.4} s", .{ session.mode, update_mode, timeDirect(.time_fixed_dt) });
@@ -2023,8 +2717,8 @@ fn finish(reason: []const u8) void {
             _ = call(.trace_dispose, session.trace, &.{}) catch {};
             if (saved) {
                 var info_path: Path = undefined;
-                var text: [256]u8 = undefined;
-                const info = std.fmt.bufPrint(&text, "client=CNBetaWin3.3.4\r\nfps={d}\r\nseed={s}\r\nreseed={t}\r\nframes={d}\r\nevents={d}\r\nspeed={d}\r\n{s}input_clock={d}\r\ngame_clocks={d}\r\npin_team={d}\r\npin_spawn={d}\r\n", .{ session.fps, seed, session.reseed, frames, events, session.speed, if (session.sync) "sync=bt-load\r\n" else "", @intFromBool(clock_mode == .record), @intFromBool(session.game_clocks), @intFromBool(session.pin_team), @intFromBool(session.pin_spawn) }) catch "";
+                var text: [320]u8 = undefined;
+                const info = std.fmt.bufPrint(&text, "client=CNBetaWin3.3.4\r\nfps={d}\r\nseed={s}\r\nreseed={t}\r\nframes={d}\r\nevents={d}\r\nspeed={d}\r\n{s}input_clock={d}\r\ngame_clocks={d}\r\npin_team={d}\r\npin_spawn={d}\r\npin_assets={d}\r\npin_random={d}\r\n", .{ session.fps, seed, session.reseed, frames, events, session.speed, if (session.sync) "sync=bt-load\r\n" else "", @intFromBool(clock_mode == .record), @intFromBool(session.game_clocks), @intFromBool(session.pin_team), @intFromBool(session.pin_spawn), @intFromBool(session.pin_assets), @intFromBool(session.pin_random) }) catch "";
                 if (infoPath(&info_path, session.path())) |p| _ = writeSmallFile(p, info);
                 if (clock_mode == .record and !clockSave(session.path())) userLog("record {s}: input clock NOT saved; it will play on the real clock", .{session.path()});
             }
@@ -2104,6 +2798,10 @@ test "feature switches" {
     try std.testing.expect(!parseConfig("sync = off").sync);
     try std.testing.expect(parseConfig("pin_team = on").pin_team);
     try std.testing.expect(parseConfig("pin_spawn = on").pin_spawn);
+    try std.testing.expect(parseConfig("pin_assets = on").pin_assets);
+    try std.testing.expect(!parseConfig("mode = record").pin_assets);
+    try std.testing.expect(parseConfig("pin_random = on").pin_random);
+    try std.testing.expect(!parseConfig("mode = record").pin_random);
     try std.testing.expect(!parseConfig("mode = record").pin_team);
 }
 

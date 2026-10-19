@@ -34,6 +34,10 @@ speed = 1               # real-time speed: 0.25 = quarter speed, 0 = as fast as 
                         # 90 frames after sync in every run instead of whenever loading finishes
 # pin_spawn = on        # experimental, needs sync: pause the entity manager from sync to frame 90, so
                         # the team, intro and their timers start on frame 90 in every run
+# pin_assets = on       # experimental, needs sync: asset loads finish 30 frames after they are asked
+                        # for in every run (the boss's arrival waits on one); first-time effects appear later
+# pin_random = on       # needs sync: System.Random seeds (bullet effects, which the game seeds from the
+                        # clock) come from the battle seed, so bullets fly the same way in every run
 # input_clock = on      # save the input system's clock with the recording and replay it (.clock file)
 # game_clocks = on      # Unity's clocks (realtimeSinceStartup, time, unscaledTime...) advance exactly one
                         # frame per frame and round the same in every run (real-time UI tweens, timers)
