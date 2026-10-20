@@ -1,6 +1,7 @@
 //! remielle-speed.exe: the window for remielle-speed.dll. It loads the DLL into the game (Inject)
 //! and edits speed.txt: on/off, the FPS target, the speed, and a hotkey that switches to a second
-//! speed while held or as a toggle. The DLL re-reads speed.txt within half a second, so Apply works
+//! speed while held or as a toggle (picked from the list, or with Set key: click it, then press
+//! the key or mouse button). The DLL re-reads speed.txt within half a second, so Apply works
 //! mid-game; the "Now" line shows what the DLL has in effect.
 const std = @import("std");
 const injector = @import("injector.zig");
@@ -10,7 +11,9 @@ const win = @import("win.zig");
 const L = win.L;
 const HWND = win.HWND;
 
-const Id = enum(u16) { inject = 100, open_folder, enabled, fps, speed, hotkey, hotkey_speed, hold, toggle, apply, preset_half, preset_1, preset_2, preset_4 };
+const Id = enum(u16) { inject = 100, open_folder, enabled, fps, speed, hotkey, set_key, hotkey_speed, hold, toggle, apply, preset_half, preset_1, preset_2, preset_4 };
+
+extern "user32" fn GetAsyncKeyState(i32) callconv(.winapi) i16;
 
 const settings_name = "speed.txt";
 const state_name = "TAS\\speed-state.txt";
@@ -25,6 +28,7 @@ var h_enabled: HWND = undefined;
 var h_fps: HWND = undefined;
 var h_speed: HWND = undefined;
 var h_hotkey: HWND = undefined;
+var h_set_key: HWND = undefined;
 var h_hotkey_speed: HWND = undefined;
 var h_hold: HWND = undefined;
 var h_toggle: HWND = undefined;
@@ -53,8 +57,9 @@ fn createControls() void {
     var names: [keys.keys.len][]const u8 = undefined;
     for (keys.keys, 0..) |k, i| names[i] = k.name;
     h_hotkey = win.dropdown(140, 228, 110, id(.hotkey), &names);
-    _ = win.label(L("switches to speed"), 262, 230, 110);
-    h_hotkey_speed = win.edit(374, 228, 70, id(.hotkey_speed), L("2"));
+    h_set_key = win.button(L("Set key"), 256, 226, 80, id(.set_key), false);
+    _ = win.label(L("switches to speed"), 346, 230, 110);
+    h_hotkey_speed = win.edit(458, 228, 70, id(.hotkey_speed), L("2"));
     h_hold = win.radio(L("while held"), 140, 262, 110, id(.hold), true);
     h_toggle = win.radio(L("toggle on each press"), 262, 262, 180, id(.toggle), false);
     _ = win.button(L("Apply"), 424, 302, 110, id(.apply), true);
@@ -122,6 +127,52 @@ fn apply() void {
     win.setText(h_saved, "Applied.");
 }
 
+// --- Set key: the next key or mouse button from the list that goes down picks the hotkey ------
+
+const capture_timer: usize = 2;
+const vk_escape: u8 = 0x1B;
+var capturing = false;
+/// Which keys were already down, so only a fresh press counts (Space or Enter on the button itself
+/// is still down when listening starts).
+var was_down = [_]bool{false} ** (keys.keys.len + 1);
+
+fn isDown(vk: u8) bool {
+    return GetAsyncKeyState(vk) < 0;
+}
+
+fn startCapture() void {
+    if (capturing) return stopCapture("Cancelled.");
+    capturing = true;
+    for (keys.keys, 0..) |k, i| was_down[i] = k.vk != 0 and isDown(k.vk);
+    was_down[keys.keys.len] = isDown(vk_escape);
+    win.setText(h_set_key, "Listening");
+    win.setText(h_saved, "Press the key or mouse button to use. Esc cancels.");
+    _ = win.SetTimer(win.hwnd_main, capture_timer, 20, null);
+}
+
+fn stopCapture(message: []const u8) void {
+    capturing = false;
+    _ = win.KillTimer(win.hwnd_main, capture_timer);
+    win.setText(h_set_key, "Set key");
+    win.setText(h_saved, message);
+}
+
+fn captureTick() void {
+    const escape = isDown(vk_escape);
+    if (escape and !was_down[keys.keys.len]) return stopCapture("Cancelled.");
+    was_down[keys.keys.len] = escape;
+    for (keys.keys, 0..) |k, i| {
+        if (k.vk == 0) continue;
+        const down = isDown(k.vk);
+        if (down and !was_down[i]) {
+            win.select(h_hotkey, i);
+            var buffer: [96]u8 = undefined;
+            return stopCapture(std.fmt.bufPrint(&buffer, "Hotkey set to {s}. Press Apply to use it.", .{k.name}) catch "");
+        }
+        was_down[i] = down;
+    }
+}
+
 fn refreshNow() void {
     var buffer: [256]u8 = undefined;
     const text = win.readFile(state_name, &buffer) orelse "-";
@@ -140,6 +191,10 @@ fn wndProc(hwnd: HWND, msg: u32, wparam: win.WPARAM, lparam: win.LPARAM) callcon
             return 0;
         },
         win.WM_TIMER => {
+            if (wparam == capture_timer) {
+                captureTick();
+                return 0;
+            }
             win.refreshStatus();
             refreshNow();
             return 0;
@@ -151,6 +206,7 @@ fn wndProc(hwnd: HWND, msg: u32, wparam: win.WPARAM, lparam: win.LPARAM) callcon
                 .inject => win.startInject(),
                 .open_folder => win.openFolder(""),
                 .apply => apply(),
+                .set_key => startCapture(),
                 .preset_half, .preset_1, .preset_2, .preset_4 => {
                     for (presets) |p| if (p.id == which) win.setText(h_speed, p.value);
                     win.setChecked(h_enabled, true);

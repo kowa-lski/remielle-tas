@@ -76,6 +76,7 @@ extern "user32" fn SetWindowTextW(HWND, [*:0]const u16) callconv(.winapi) BOOL;
 extern "user32" fn GetWindowTextW(HWND, [*]u16, i32) callconv(.winapi) i32;
 pub extern "user32" fn EnableWindow(HWND, BOOL) callconv(.winapi) BOOL;
 pub extern "user32" fn SetTimer(?HWND, usize, u32, ?*anyopaque) callconv(.winapi) usize;
+pub extern "user32" fn KillTimer(?HWND, usize) callconv(.winapi) BOOL;
 extern "user32" fn LoadCursorW(?*anyopaque, usize) callconv(.winapi) ?*anyopaque;
 extern "user32" fn LoadIconW(?*anyopaque, usize) callconv(.winapi) ?*anyopaque;
 extern "user32" fn GetSysColorBrush(i32) callconv(.winapi) ?*anyopaque;

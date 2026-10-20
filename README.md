@@ -101,7 +101,7 @@ playback. Start the game, open `remielle-speed.exe`, press **Inject**, then set:
 | Enabled | on/off; off puts the game's own frame cap and vsync back |
 | FPS target | frames the game renders per second (vsync is turned off to reach it) |
 | Speed | game speed: each frame moves speed / FPS target of game time, so 2 is twice as fast at the same frame rate |
-| Hotkey, switches to speed | while the game window is in front, the hotkey switches to the second speed |
+| Hotkey, switches to speed | while the game window is in front, the hotkey switches to the second speed; pick it from the list, or press **Set key** and then the key or mouse button |
 | while held / toggle | the second speed lasts while the key is held, or each press switches between the two |
 
 **Apply** writes `speed.txt` in the game folder; the DLL picks it up within half a second, mid-game. The x0.5 to x4
