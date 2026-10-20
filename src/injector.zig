@@ -1,10 +1,12 @@
-//! Loading remielle-tas.dll into the running game, shared by tas-inject.exe and tas-gui.exe: the
-//! same way remielle.exe loads thaumiel.dll (LoadLibraryA on a thread in the game process).
+//! Loading a DLL into the running game, shared by tas-inject.exe, tas-gui.exe and
+//! remielle-speed.exe: the same way remielle.exe loads thaumiel.dll (LoadLibraryA on a thread in
+//! the game process).
 const std = @import("std");
 const w = std.os.windows;
 
 pub const exe_name = "ZenlessZoneZeroBeta.exe";
 pub const dll_name = "remielle-tas.dll";
+pub const speed_dll_name = "remielle-speed.dll";
 
 extern "kernel32" fn CreateToolhelp32Snapshot(u32, u32) callconv(.winapi) w.HANDLE;
 extern "kernel32" fn Process32FirstW(w.HANDLE, *ProcessEntry) callconv(.winapi) w.BOOL;
@@ -102,11 +104,11 @@ pub fn programDir(buffer: []u8) ?[]const u8 {
     return buffer[0..end];
 }
 
-/// `<program folder>\remielle-tas.dll`, or null if it is not there.
-pub fn dllPath(buffer: []u8) ?[:0]const u8 {
+/// `<program folder>\<name>`, or null if it is not there.
+pub fn dllPath(buffer: []u8, name: []const u8) ?[:0]const u8 {
     var dir_buffer: [1024]u8 = undefined;
     const dir = programDir(&dir_buffer) orelse return null;
-    const path = std.fmt.bufPrintZ(buffer, "{s}{s}", .{ dir, dll_name }) catch return null;
+    const path = std.fmt.bufPrintZ(buffer, "{s}{s}", .{ dir, name }) catch return null;
     if (GetFileAttributesA(path.ptr) == 0xFFFFFFFF) return null;
     return path;
 }

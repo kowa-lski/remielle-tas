@@ -36,18 +36,44 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         }),
-        .win32_manifest = b.path("src/tas-gui.manifest"),
+        .win32_manifest = b.path("src/app.manifest"),
     });
     gui.subsystem = .windows;
     b.installArtifact(gui);
 
-    const tests = b.addTest(.{
+    // The speed tool: a DLL that scales game speed to an FPS target, and its window.
+    const speed_dll = b.addLibrary(.{
+        .name = "remielle-speed",
+        .linkage = .dynamic,
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/tas.zig"),
+            .root_source_file = b.path("src/speed_main.zig"),
             .target = target,
             .optimize = optimize,
         }),
     });
-    const test_step = b.step("test", "Run the unit tests (tas.txt parsing, seeds, key names)");
-    test_step.dependOn(&b.addRunArtifact(tests).step);
+    b.installArtifact(speed_dll);
+
+    const speed_gui = b.addExecutable(.{
+        .name = "remielle-speed",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/speed_gui.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+        .win32_manifest = b.path("src/app.manifest"),
+    });
+    speed_gui.subsystem = .windows;
+    b.installArtifact(speed_gui);
+
+    const test_step = b.step("test", "Run the unit tests (tas.txt and speed.txt parsing, seeds, key names)");
+    for ([_][]const u8{ "src/tas.zig", "src/speed.zig", "src/keys.zig" }) |file| {
+        const tests = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(file),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        test_step.dependOn(&b.addRunArtifact(tests).step);
+    }
 }

@@ -16,7 +16,7 @@ fn fail(comptime fmt: []const u8, args: anytype) u8 {
 
 pub fn main() u8 {
     var dll_buffer: [1024]u8 = undefined;
-    const dll = injector.dllPath(&dll_buffer) orelse return fail("{s} not found next to tas-inject.exe", .{injector.dll_name});
+    const dll = injector.dllPath(&dll_buffer, injector.dll_name) orelse return fail("{s} not found next to tas-inject.exe", .{injector.dll_name});
 
     std.debug.print("tas-inject: waiting for {s} (start the game with remielle.exe)...\n", .{injector.exe_name});
     var pid: u32 = 0;

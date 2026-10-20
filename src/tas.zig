@@ -264,6 +264,12 @@ pub fn installFromWorker() void {
     log.info("TAS ready: {d} methods and 3 API slots verified; mode is read from {s} at every battle start", .{ methods.values.len, config_file });
 }
 
+/// For remielle-speed.dll: a recording or playback is running, so the TAS owns the frame cap and
+/// the frame time (the speed tool steps aside until it ends).
+export fn remielle_tas_session_active() callconv(.c) bool {
+    return ready and session.mode != .off;
+}
+
 // --- managed calls -----------------------------------------------------------------------
 
 const CallError = error{ManagedException};

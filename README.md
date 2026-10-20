@@ -30,6 +30,8 @@ Output in `zig-out\bin\`:
 | `remielle-tas.dll` | the TAS itself, loaded into the game |
 | `tas-inject.exe` | loads `remielle-tas.dll` into the running game |
 | `tas-gui.exe` | the launcher: edits `tas.txt`, injects, shows status and the log |
+| `remielle-speed.dll` | the speed tool: plays the game faster or slower (see [Speed tool](#speed-tool)) |
+| `remielle-speed.exe` | its window: injects it and edits `speed.txt` |
 
 ## Install
 
@@ -37,7 +39,7 @@ Output in `zig-out\bin\`:
 `ZenlessZoneZeroBeta.exe` and `remielle.exe`. It copies `packaging\tas.txt` only if the folder has none yet.
 
 By hand: copy `zig-out\bin\remielle-tas.dll`, `zig-out\bin\tas-inject.exe`, `zig-out\bin\tas-gui.exe` and
-`packaging\tas.txt` into the game folder.
+`packaging\tas.txt` into the game folder, plus `remielle-speed.dll` and `remielle-speed.exe` for the speed tool.
 
 ## Use
 
@@ -88,6 +90,28 @@ pin_random = on
 | `input_clock` | saves the Input System's clock with the recording and replays it |
 | `game_clocks` | Unity's clocks (`realtimeSinceStartup`, `time`, `unscaledTime`, ...) advance exactly one frame per frame and round the same in every run |
 | `reseed` | `tree` (default): reseed Unity's generator before every AI tree tick; `frame`; `start` |
+
+## Speed tool
+
+A separate DLL and window for playing the game faster or slower, anywhere in the game; no recording or
+playback. Start the game, open `remielle-speed.exe`, press **Inject**, then set:
+
+| Setting | What it does |
+|---|---|
+| Enabled | on/off; off puts the game's own frame cap and vsync back |
+| FPS target | frames the game renders per second (vsync is turned off to reach it) |
+| Speed | game speed: each frame moves speed / FPS target of game time, so 2 is twice as fast at the same frame rate |
+| Hotkey, switches to speed | while the game window is in front, the hotkey switches to the second speed |
+| while held / toggle | the second speed lasts while the key is held, or each press switches between the two |
+
+**Apply** writes `speed.txt` in the game folder; the DLL picks it up within half a second, mid-game. The x0.5 to x4
+buttons set the speed and apply it at once. The **Now** line shows what is in effect.
+
+- If the computer can't render the FPS target, the game runs proportionally slower than the speed (each frame is
+  still speed / FPS of game time).
+- Very high speeds take big steps per frame; fast-moving fights may play differently than at speed 1.
+- During a TAS recording or playback, the TAS owns the timing: the speed tool pauses and takes over again when it
+  ends. Log: `TAS\speed-dll.log`.
 
 ## Logs and analysis
 
