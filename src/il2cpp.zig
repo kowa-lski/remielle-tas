@@ -70,32 +70,72 @@ fn validateTable() !void {
     if (game_size != pins.dumper_size_of_image) return error.UnsupportedClient;
     if (!peek(@intFromPtr(unity) + pins.unity_table_offset, std.mem.asBytes(&table))) return error.TableUnreadable;
     var mismatches: usize = 0;
+    var swapped: usize = 0;
     inline for (expected, 0..) |rva, i| {
         if (rva == 0) {
             if (table[i] < game or table[i] >= game + game_size) mismatches += 1;
         } else if (table[i] != game + rva) {
-            log.err("API[{d}] expected RVA 0x{X}, actual 0x{X}", .{ i, rva, table[i] -% game });
-            mismatches += 1;
+            const late = lateSwap(i);
+            if (late != null and table[i] == game + late.?) {
+                // the client replaced this entry after start-up: call the start-up function
+                table[i] = game + rva;
+                swapped += 1;
+            } else {
+                log.err("API[{d}] expected RVA 0x{X}, actual 0x{X}", .{ i, rva, table[i] -% game });
+                mismatches += 1;
+            }
         }
     }
     if (mismatches != 0) return error.TableMismatch;
+    if (swapped != 0) log.info("{d} API slots were replaced after start-up; using their start-up functions", .{swapped});
     inline for (pins.api_checks) |check| {
         var bytes: [check[1].len]u8 = undefined;
-        if (!peek(table[check[0]], &bytes) or !std.mem.eql(u8, &bytes, check[1])) return error.CodeMismatch;
+        if (!peek(table[check[0]], &bytes) or !std.mem.eql(u8, &bytes, check[1])) {
+            log.err("API[{d}] code {x} does not match the pin {x}", .{ check[0], &bytes, check[1] });
+            return error.CodeMismatch;
+        }
     }
     table_valid = true;
     log.info("validated " ++ pins.client ++ ": GameAssembly=0x{X}", .{game});
 }
 
+/// The value the client puts in API slot `i` after start-up, if it is one it replaces.
+fn lateSwap(comptime i: usize) ?usize {
+    inline for (pins.api_late_swaps) |swap| {
+        if (swap[0] == i) return swap[1];
+    }
+    return null;
+}
+
 const Readiness = enum { waiting, ready, failed };
 var readiness_validated = false;
 
-fn runtimeReady() Readiness {
+/// How long the table may look unpopulated before it is checked anyway: a table that never matches
+/// is reported (every mismatching slot, as thaumiel's dumper does) instead of waited on in silence.
+const table_wait_ms: u64 = 5000;
+
+fn runtimeReady(waited_ms: u64) Readiness {
     if (!table_valid) {
-        const g = GetModuleHandleA("GameAssembly.dll") orelse return .waiting;
-        const unity = GetModuleHandleA("UnityPlayer.dll") orelse return .waiting;
-        const first = word(@intFromPtr(unity) + pins.unity_table_offset + 63 * @sizeOf(usize)) catch return .waiting;
-        if (first != @intFromPtr(g) + expected[63]) return .waiting;
+        const g = GetModuleHandleA("GameAssembly.dll");
+        const unity = GetModuleHandleA("UnityPlayer.dll");
+        const late = waited_ms >= table_wait_ms;
+        if (g == null or unity == null) {
+            if (!late) return .waiting;
+            log.err("modules not found after {d} ms: GameAssembly {s}, UnityPlayer {s}", .{ waited_ms, if (g == null) "missing" else "loaded", if (unity == null) "missing" else "loaded" });
+            return .failed;
+        }
+        const slot = @intFromPtr(unity.?) + pins.unity_table_offset + 63 * @sizeOf(usize);
+        const first = word(slot) catch |err| {
+            if (!late) return .waiting;
+            log.err("API table unreadable at UnityPlayer+0x{X} ({t})", .{ pins.unity_table_offset, err });
+            return .failed;
+        };
+        const late63 = lateSwap(63);
+        const swapped63 = late63 != null and first == @intFromPtr(g.?) + late63.?;
+        if (first != @intFromPtr(g.?) + expected[63] and !swapped63) {
+            if (!late) return .waiting;
+            log.err("API[63] is 0x{X} (GameAssembly+0x{X}), expected GameAssembly+0x{X}; checking the whole table", .{ first, first -% @intFromPtr(g.?), expected[63] });
+        }
         validateTable() catch |err| {
             log.err("API table check failed: {t} (is this client " ++ pins.client ++ "?)", .{err});
             return .failed;
@@ -115,7 +155,7 @@ fn runtimeReady() Readiness {
 pub fn waitReady(timeout_ms: u64) !void {
     const t0 = GetTickCount64();
     while (true) {
-        switch (runtimeReady()) {
+        switch (runtimeReady(GetTickCount64() - t0)) {
             .ready => return,
             .failed => return error.RuntimeCheckFailed,
             .waiting => {},

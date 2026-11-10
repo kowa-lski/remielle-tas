@@ -1,7 +1,10 @@
-//! CNBetaWin3.3.4 read-only bootstrap gate. See docs/startup-crash-20260920.md.
+//! CNBetaWin3.4.3 read-only bootstrap gate (anchors in pins.zig; see thaumiel-logger docs/startup-crash-20260920.md).
 //! Runtime::Init publishes the attached main thread before building its domain context.
 //! Wait for the context store near the end of Init; never call an API to probe readiness.
 //!
+//! 3.3.4 -> 3.4.3 (2026-11-10), same method: Thread::Attach 0x9af460 -> 0xa262b0, anchor 1 0x98442c ->
+//! 0x9fb07e, main_thread_rva 0x56dcbc0 -> 0x5a00c00, anchors 2-4 0x987180 -> 0x9fde20 (+0x38/+0x56), anchor
+//! 2's rbp displacement 0x280 -> 0x230, anchors 3 and 4 byte-identical.
 //! Re-traced 3.3.3 -> 3.3.4 (2026-09-25) by the same structural method, self-checked by first
 //! reproducing every 3.3.3 value from the archived 3.3.3 binary:
 //!  - Thread::Attach is slot 152's jmp target (0x99b9b0 -> 0x9af460).

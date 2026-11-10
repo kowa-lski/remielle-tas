@@ -66,7 +66,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(speed_gui);
 
     const test_step = b.step("test", "Run the unit tests (tas.txt and speed.txt parsing, seeds, key names)");
-    for ([_][]const u8{ "src/tas.zig", "src/speed.zig", "src/keys.zig" }) |file| {
+    for ([_][]const u8{ "src/tas.zig", "src/speed.zig", "src/keys.zig", "src/recordings.zig" }) |file| {
         const tests = b.addTest(.{
             .root_module = b.createModule(.{
                 .root_source_file = b.path(file),

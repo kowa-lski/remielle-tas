@@ -8,7 +8,7 @@ It is a separate DLL that loads next to [thaumiel](https://git.xeondev.com/remie
 not modified.
 
 > You need a working Remielle setup (client, server, thaumiel). This project doesn't cover that. The DLL is pinned
-> to the **CNBetaWin3.3.4** client; on any other build it checks its pins at start-up, logs the mismatch and stays
+> to the **CNBetaWin3.4.3** client; on any other build it checks its pins at start-up, logs the mismatch and stays
 > off.
 
 ## Build
@@ -43,9 +43,11 @@ By hand: copy `zig-out\bin\remielle-tas.dll`, `zig-out\bin\tas-inject.exe`, `zig
 
 ## Use
 
-**Launcher:** `tas-gui.exe` in the game folder edits `tas.txt` (mode, file, fps, speed, seed, the switches;
-**Save** keeps the file's comments and any other settings), loads the TAS into the game (**Inject**), and shows
-whether the game is running, whether the TAS is in it, and the end of `TAS\tas-log.txt`.
+**Launcher:** `tas-gui.exe` in the game folder edits `tas.txt` (mode, file, fps, speed, seed, the switches),
+loads the TAS into the game (**Inject**), and shows whether the game is running, whether the TAS is in it, and
+the end of `TAS\tas-log.txt`. Every change is saved by itself (the file's comments and other settings are kept).
+With **Automatic** ticked, recordings are named `TAS\battle-<date>-<time>.inputtrace` and play uses the newest
+one; the box shows which. **Browse...** picks an older recording instead.
 
 By hand:
 
@@ -56,8 +58,9 @@ By hand:
    - **Record:** `mode = record`, optionally `file = TAS\run1.inputtrace`, `seed = 42`. Play the battle; when it
      ends the recording is saved as `TAS\<name>.inputtrace` plus `.info.txt` (and `.clock` with
      `input_clock`).
-   - **Play:** `mode = play`, `file = TAS\<name>.inputtrace`. Start the same battle with the same team and don't
-     touch the controls. `speed = 1` plays in real time.
+   - **Play:** `mode = play`, `file = TAS\<name>.inputtrace` (or `file = auto` for the newest recording in
+     `TAS\`). Start the same battle with the same team and don't touch the controls. `speed = 1` plays in real
+     time.
    - **Stop a playback:** F8 (`stop_key` in `tas.txt`). The rest of the battle is yours.
 4. Every start and end is a line in `TAS\tas-log.txt`.
 

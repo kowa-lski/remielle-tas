@@ -2,7 +2,7 @@
 
 How `remielle-tas.dll` records and replays a battle, and why each mechanism exists. The README covers building and
 use; this file is the reference for what the DLL does inside the game. Most sections come from test runs against
-the Deadly Assault "Butcher" stage on CNBetaWin3.3.4, and name the run that showed each problem.
+the Deadly Assault "Butcher" stage on CNBetaWin3.3.4 (the client of those runs), and name the run that showed each problem.
 
 The DLL is loaded into the running game by `tas-inject.exe`, next to thaumiel. It hooks only methods thaumiel
 leaves alone; see "Battle lifecycle" below. It writes:
@@ -175,6 +175,36 @@ frame. Every clock is moved forward to start on the float grid of the binade [16
 session, realtime follows real time again from where it was, and the game-time clocks keep their offset, so nothing
 jumps back. A game kept running for more than ~4.5 h gets a warning in `tas-log.txt`.
 
+**Fixed-step phase.** Unity runs FixedUpdate inside its native player loop whenever `Time.time` has passed
+`Time.fixedTime` by a fixed step; the clock getters (`game_clocks`) don't reach it. With a fixed frame step the
+offset between the two clocks stays what it was at the session start, which is left over from the game's
+real-time history: 2026-11-10's pair (21:47 / 21:49, 3.4.3) had 0.0137 s in the recording and 0.0098 s in the
+playback on every frame (`fixed_phase` in `tas-frames.tsv`), and the active agent was 7.9 cm apart at its first
+dash, everything the combat logger tracks being identical until then. Every recording now lengthens its
+session's first frame (`Time.captureDeltaTime`) by what puts the phase at half a fixed step on the next frame,
+then goes back to 1 / fps; half, so float rounding can't move a physics step to a neighbouring frame. It needs
+the clock hooks. Recordings say `fixed_align=1`, and a playback aligns only if its recording did, so older
+recordings replay as before. `tas-log.txt` has the phase before and after.
+
+**Sound draws (`sound_rng`).** Crit rolls are `Random.value` in the damage system, drawn from Unity's shared
+generator, and so are the random choices of the sound actions (`ConfigSoundAction_Condition` and `_Random`).
+How many numbers a sound action takes depends on the sound engine, which runs on real time. 2026-11-10's pair
+(22:55 / 22:59) matched on every hit until #1167, at CRIT Rate 99.4%. In that frame a sound condition drew 8
+numbers in the recording and 5 in the playback, so the next crit roll was 0.998843 (no crit) in one run and
+0.487564 (crit) in the other. Every recording now runs those two sound actions on a generator state of their
+own, swapped in on entry and out on exit and seeded from `seed`, so they no longer move the game's draws.
+Recordings say `sound_rng=1`, and a playback isolates sound only if its recording did. The `unity_draw` rows
+in `tas-rng.tsv` (every managed Unity draw with its call stack) are how this was found.
+
+**Per-frame System.Random (`random_frames`).** `pin_random` seeds each System.Random once, so one stray draw
+shifts that generator for the rest of the battle. 2026-11-10's pair (23:21 / 23:25, with `sound_rng`) matched
+until hit #863. The game's shared generator, behind most of its ~240k draws a battle, got one extra draw in the
+playback at frame 46 from a one-off event, and every later value came one step along. By frame 4574 the
+Bangboo's AI picked its next action a frame later, and its 50%-crit hits split from there. Every recording now
+reseeds each pinned generator at its first draw in every frame, from its pinned seed and the frame number (as
+Unity's generator is with `reseed = frame`), so a stray draw changes only its own frame. Recordings say
+`random_frames=1`, and a playback reseeds per frame only if its recording did.
+
 `seed` in play mode overrides the recording's seed. This is how to look for enemy behaviour: the same inputs
 against different seeds.
 
@@ -226,18 +256,55 @@ Every managed call goes through `il2cpp_runtime_invoke` (API slot 138), which re
 file, bad trace) instead of unwinding through the DLL. Objects come from `il2cpp_object_new` (slot 128) and
 strings from `il2cpp_string_new` (slot 145).
 
-Pins, all CNBetaWin3.3.4, checked at install; any mismatch logs and leaves the TAS off:
+Pins, all CNBetaWin3.4.3, checked at install; any mismatch logs and leaves the TAS off:
 
 - **API slots:** RVA and the first code bytes.
-  - 128 `object_new`: `0x927A20`, a `try { Object::New } catch` wrapper calling the allocator compiled `new`
+  - 128 `object_new`: `0x99DEF0`, a `try { Object::New } catch` wrapper calling the allocator compiled `new`
     uses.
-  - 138 `runtime_invoke`: `0x927B30`.
-  - 145 `string_new`: `0x927CE0`. It follows `string_length` (143) and `string_chars` (144), and shares its
+  - 138 `runtime_invoke`: `0x99E000`.
+  - 145 `string_new`: `0x99E280`. It follows `string_length` (143) and `string_chars` (144), and shares its
     code with `string_new_wrapper` (148).
 - **Methods:** name, parameter count and code RVA, through `il2cpp.zig`'s `findMethodInfoAt` (it returns the
   `MethodInfo*` that `runtime_invoke` takes).
 - **Layouts:** `System.Exception._message` (+0x18) and `System.String` length/chars (+0x10/+0x14), for
   exception messages.
+
+## Client updates
+
+Every client build moves every RVA, re-randomises the obfuscated class and method names, and shuffles field
+offsets, so each pin is re-derived. What 3.3.4 -> 3.4.3 (2026-11-10) took:
+
+1. **Bootstrap** (`src/pins.zig`, `src/dumper-rvas.zon`): the same values as the thaumiel-logger build for the
+   client. The API table is the `API` rows of a v7 dump (`il2cpp-v7.tsv`, written by the logger when
+   `dumper-enable.txt` is beside the launcher), taken as the live client holds it. The seven code checks are
+   re-read at their slots' new RVAs from `GameAssembly.dll`, and the readiness anchors re-traced, with
+   thaumiel-logger's `tools/update/rederive_runtime.py` (`classify_checks`, `readiness`). Every check should
+   change only in a RIP-relative displacement, a rel32, an obfuscation key or a struct displacement; a changed
+   instruction shape means the table is wrong. The Unity table offset is in the logger's log
+   (`Unity table=` minus UnityPlayer's base) and in its build.
+2. **`tas.zig` and `speed.zig` pins**, from the old and new dumps and binaries (thaumiel-logger's
+   `rederive_image.Image`):
+   - named methods by class, name and parameter count, picking overloads by instruction shape;
+   - obfuscated classes with the logger's structural `ClassMatcher`, or by their field types when that is
+     ambiguous (the AI-start closure: `EntityHandle` + `Action<UInt32,Boolean>`);
+   - obfuscated methods by instruction shape against every method of the matched class;
+   - field offsets from the dump by name, confirmed where possible by pairing the displacements of a hook's
+     old and new bodies instruction by instruction (`List<T>._size`, which the dump does not lay out, came from
+     `BehaviorManager::Tick` this way).
+   **Trap (new in 3.4.3):** some time after start-up the client overwrites 13 API table entries with
+   other functions (slot 63, `il2cpp_domain_get` at start-up, then holds a function that takes
+   arguments). The dump (start-up) has the real ones; a DLL injected later sees the others.
+   `pins.api_late_swaps` lists the later values; `il2cpp.zig` accepts them for those slots only and calls
+   the pinned start-up functions. After 5 s of waiting, `il2cpp.zig` logs every slot that matches neither,
+   with its value, so a new client's swaps come out of one injection.
+3. **Check before building:** every hook's prologue (and its `.cmp_rip` / `.jcc8` tail) at the new RVA, the
+   dump's owner of every pinned RVA, and the two input-clock getters' `jmp [rip+x]` at +0x21 / +0x53.
+
+3.3.4 -> 3.4.3 renames: AI start `BKOBIBDGHFD::BCLGCCJAAEB` -> `HGPNFEFMGDD::HBKPIEOAFAO`, team setup
+`KLHKKPJMGLL::ICCDKMJBFGB` -> `IGEGOMHIDCF::NADJGOIGPLB`, entity manager `IDBODLAJBDJ::HFOHNJIKEAH` ->
+`OFNJPBGMCMI::ALJAHIMGLNL`, bullet effect `GLPJGKBDGGI::LNHOKEBPCKI` (+`EHHDIKLPLMD`) ->
+`CDCDPOFLMAN::PMPHIIIDFMI` (+`OMGEMKLPNCE`), AI subsystem `IOMGMDHDGON` -> `NLGOHPPBDCA`. The names in the
+comments of `src/tas.zig` are the 3.3.4 ones the investigations used.
 
 ## Known risks (what the first tests answer)
 

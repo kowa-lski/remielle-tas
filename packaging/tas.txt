@@ -3,10 +3,11 @@
 
 mode = off              # off | record | play
 
-# record: where to save. Leave it out for TAS\battle-<date>-<time>.inputtrace.
-#         An existing file is never overwritten (-2, -3, ... is added).
-# play:   the recording to play back (required).
-file = TAS\run.inputtrace
+# auto:   record names each battle TAS\battle-<date>-<time>.inputtrace; play uses the newest
+#         recording in TAS\ (tas-gui's Automatic box).
+# record: or a name of your own. An existing file is never overwritten (-2, -3, ... is added).
+# play:   or the recording to play back.
+file = auto
 
 fps = 60                # game frames per second of game time (play uses the recording's)
 speed = 1               # real-time speed: 0.25 = quarter speed, 0 = as fast as possible

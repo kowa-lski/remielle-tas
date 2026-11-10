@@ -243,9 +243,9 @@ fn step() void {
 
 // --- install ----------------------------------------------------------------------------------
 
-const engine_update_rva: usize = 0x151A5720;
-/// push rbp/rsi/rdi/rbx; sub rsp,0x58; lea rbp,[rsp+0x50] -- position independent.
-const engine_update_prologue = [_]u8{ 0x55, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x58, 0x48, 0x8D, 0x6C, 0x24, 0x50 };
+const engine_update_rva: usize = 0x1603BD00;
+/// push rbp/rsi/rdi/rbx; sub rsp,0x88; lea rbp,[rsp+0x80] -- position independent.
+const engine_update_prologue = [_]u8{ 0x55, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0x88, 0x00, 0x00, 0x00, 0x48, 0x8D, 0xAC, 0x24, 0x80, 0x00, 0x00, 0x00 };
 var engine_update_original: u64 = 0;
 
 const Hook6 = *const fn (u64, u64, u64, u64, u64, u64) callconv(.c) void;
@@ -259,11 +259,11 @@ fn install() !void {
     const base = try il2cpp.gameBase();
     try il2cpp.beginLookup();
     defer il2cpp.endLookup();
-    set_capture = try resolve("UnityEngine", "Time", "set_captureDeltaTime", 1, 0x1FD6B3E0);
-    get_fps = try resolve("UnityEngine", "Application", "get_targetFrameRate", 0, 0x1FD4D850);
-    set_fps = try resolve("UnityEngine", "Application", "set_targetFrameRate", 1, 0x1FD4D860);
-    get_vsync = try resolve("UnityEngine", "QualitySettings", "get_vSyncCount", 0, 0x1FE240A0);
-    set_vsync = try resolve("UnityEngine", "QualitySettings", "set_vSyncCount", 1, 0x1FE240B0);
+    set_capture = try resolve("UnityEngine", "Time", "set_captureDeltaTime", 1, 0x2120D9A0);
+    get_fps = try resolve("UnityEngine", "Application", "get_targetFrameRate", 0, 0x211EFE20);
+    set_fps = try resolve("UnityEngine", "Application", "set_targetFrameRate", 1, 0x211EFE30);
+    get_vsync = try resolve("UnityEngine", "QualitySettings", "get_vSyncCount", 0, 0x212C8BF0);
+    set_vsync = try resolve("UnityEngine", "QualitySettings", "set_vSyncCount", 1, 0x212C8C00);
     const update = try il2cpp.findMethodAt(try il2cpp.findClass("MoleMole", "GameEngine"), "Update", 0, engine_update_rva);
     const spec: detour.Spec = .{ .prologue = &engine_update_prologue, .shape = .plain };
     if (!detour.matches(update, spec)) return error.PrologueMismatch;
